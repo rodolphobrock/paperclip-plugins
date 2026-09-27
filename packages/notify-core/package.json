@@ -1,0 +1,27 @@
+{
+  "name": "@paperclip-plugins/notify-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Internal notification pipeline bundled into the Paperclip notifier plugins. Not published.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodolphobrock/paperclip-plugins.git",
+    "directory": "packages/notify-core"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@paperclipai/plugin-sdk": "2026.916.1"
+  }
+}

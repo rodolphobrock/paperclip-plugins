@@ -1,0 +1,46 @@
+{
+  "name": "paperclip-plugin-ntfy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Push notifications for Paperclip events via ntfy.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "paperclip",
+    "paperclip-plugin",
+    "notifications",
+    "ntfy"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodolphobrock/paperclip-plugins.git",
+    "directory": "packages/plugin-ntfy"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ./esbuild.config.mjs",
+    "dev": "node ./esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "peerDependencies": {
+    "@paperclipai/plugin-sdk": ">=2026.916.1"
+  },
+  "devDependencies": {
+    "@paperclipai/plugin-sdk": "2026.916.1",
+    "@paperclip-plugins/notify-core": "workspace:*"
+  }
+}
