@@ -416,7 +416,7 @@ Erros do Apprise nunca incluem o corpo da resposta (pode ecoar URLs com credenci
 
 ### Fase 7 — Documentação e release
 
-READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, publicar a primeira versão de cada plugin com um token granular temporário (o npm só aceita trusted publisher em pacote que já existe), configurar o trusted publisher (repositório `rodolphobrock/paperclip-plugins`, workflow `release.yml`) e revogar o token, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
+READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, publicar a primeira versão de cada plugin com um token granular temporário (o npm só aceita trusted publisher em pacote que já existe), configurar o trusted publisher (repositório `rodolphobrock/paperclip-plugins`, workflow `release.yml`) e revogar o token, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257, e reportar ao Paperclip os dois problemas do host achados aqui: `hostVersion` "0.0.0" no carregador de plugins (bloqueia `minimumHostVersion`) e o aviso do Ajv em modo estrito para todo campo `format: "secret-ref"` (secret é objeto; sugerir registrar o formato como keyword ou `strictTypes: false`).
 
 ## Desvios da spec
 

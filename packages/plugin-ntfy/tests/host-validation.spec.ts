@@ -45,3 +45,19 @@ describe("host config validation", () => {
     expect(hostValidator()({})).toBe(false);
   });
 });
+
+describe("host schema compilation", () => {
+  it("compiles in the host's Ajv with only the known secret-ref warning", () => {
+    const warnings: unknown[] = [];
+    const logger = { log() {}, warn: (...args: unknown[]) => warnings.push(args), error() {} };
+    const ajv = new Ajv({ allErrors: true, logger });
+    addFormats(ajv);
+    ajv.addFormat("secret-ref", { validate: () => true });
+    ajv.compile(manifest.instanceConfigSchema ?? {});
+    // Host limitation: format on a non-string field (secret refs are objects). See fields.ts.
+    const unexpected = warnings.filter(
+      (w) => !String(w).includes('missing type "number,string" for keyword "format"'),
+    );
+    expect(unexpected).toEqual([]);
+  });
+});

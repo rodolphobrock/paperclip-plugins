@@ -102,8 +102,10 @@ export function basicAuthHeader(username: string, password: string): string {
 }
 
 /**
- * No `type`: the host UI saves `{ type: "secret_ref", secretId }` objects, and its server-side
- * Ajv check would reject them under `type: "string"`. The form picks the widget from `format`.
+ * No `type`: the host UI saves secret fields as `{ type: "secret_ref", secretId }` objects and
+ * validates the saved config with Ajv, so `type: "string"` would reject them. The host needs
+ * `format: "secret-ref"` to find secret fields; its Ajv (strict mode) logs one "missing type"
+ * warning per such field, which no schema shape avoids (reported upstream, see the plan).
  */
 export function secretRefSchema(title: string): JsonSchema {
   return { format: "secret-ref", title };
