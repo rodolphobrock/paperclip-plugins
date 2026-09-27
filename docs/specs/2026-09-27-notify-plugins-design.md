@@ -12,11 +12,11 @@ Tentativas anteriores no core (#303, #389 com ntfy, #393) e como plugin dentro d
 
 ## Objetivo
 
-Três pacotes neste repositório (`rodolphobrock/paperclip-plugins`), publicados no npm:
+Três pacotes neste repositório (`rodolphobrock/paperclip-plugins`); só os dois plugins são publicados no npm:
 
 | Pacote | Tipo | Papel |
 | --- | --- | --- |
-| `@<escopo>/paperclip-notify-core` | biblioteca | Pipeline comum: eventos → mensagem normalizada → filtros → dedupe → silêncio → limite/digest → envio → retry. Contrato `NotificationSender`. |
+| `@paperclip-plugins/notify-core` | biblioteca interna (`private`, não publicada) | Pipeline comum: eventos → mensagem normalizada → filtros → dedupe → silêncio → limite/digest → envio → retry. Contrato `NotificationSender`. |
 | `paperclip-plugin-ntfy` | plugin | Sender ntfy com prioridade, tags, link de clique, autenticação e headers extras. |
 | `paperclip-plugin-apprise` | plugin | Sender apprise-api nos modos com estado (rota por tag) e sem estado (destinos por URL). |
 
@@ -37,7 +37,7 @@ Fecha a #26 e cobre boa parte da #2897 e da #3257 sem tocar no core.
 | Só ntfy nativo | parcial | Recursos completos do ntfy (prioridade, tags, clique por evento), mas público estreito. |
 | Só Apprise | parcial | Mais de 100 destinos com um plugin, mas perde prioridade e link de clique por evento no modo com estado e exige o container do apprise-api. |
 | Um plugin híbrido (ntfy + Apprise como backends) | descartada | Configuração condicionada ao backend, permissões somadas, nome genérico ruim para descoberta. |
-| **Dois plugins + biblioteca comum** | **escolhida** | Responsabilidade única, configuração enxuta, nomes fáceis de achar, mesmo padrão dos notifiers da comunidade; a parte cara fica na biblioteca. Custo: cerca de 1 dia a mais e três pacotes para publicar. |
+| **Dois plugins + biblioteca comum** | **escolhida** | Responsabilidade única, configuração enxuta, nomes fáceis de achar, mesmo padrão dos notifiers da comunidade; a parte cara fica na biblioteca. A biblioteca é interna (fonte única no repositório, embutida no build de cada plugin), então só dois pacotes vão para o npm e não é preciso escopo. Publicá-la fica para quando alguém quiser escrever outro notifier com ela. |
 | Um repositório por plugin | descartada | CI, lint e release repetidos; atualização do SDK em vários lugares. Monorepo `paperclip-plugins` com regra para separar um plugin quando fizer sentido (decisão 1). |
 
 ## Fatos do fornecedor que moldam o desenho
@@ -69,7 +69,7 @@ Este repositório (`rodolphobrock/paperclip-plugins`, licença MIT, igual ao Pap
 ```
 paperclip-plugins/
 ├── packages/
-│   ├── notify-core/     # @<escopo>/paperclip-notify-core (biblioteca)
+│   ├── notify-core/     # @paperclip-plugins/notify-core (biblioteca interna, private)
 │   ├── plugin-ntfy/     # paperclip-plugin-ntfy
 │   └── plugin-apprise/  # paperclip-plugin-apprise
 ├── examples/
@@ -85,14 +85,14 @@ paperclip-plugins/
 Convenções do repositório:
 
 - Plugins: pasta `plugin-<nome>`, pacote npm `paperclip-plugin-<nome>` sem escopo (padrão do ecossistema), ID de manifest igual ao nome do pacote.
-- Bibliotecas compartilhadas: pasta `<família>-core`, pacote com escopo (`@<escopo>/paperclip-<família>-core`).
+- Bibliotecas compartilhadas: pasta `<família>-core`, pacote `@paperclip-plugins/<família>-core` com `"private": true`. O código fica num lugar só; cada plugin a declara como `devDependency` (`workspace:*`) e o esbuild a embute no `worker.js` (a preset do SDK usa `bundle: true`), então o pacote publicado do plugin não depende dela. Só vira pacote público se houver uso fora deste repositório.
 - Cada pacote tem versão, changelog e README próprios; o README da raiz é o índice.
 - CI roda só os pacotes afetados (`pnpm --filter "...[origin/main]"`); labels de issue por pacote (`pkg:ntfy`, `pkg:apprise`, `pkg:notify-core`).
 - Um plugin sai para repositório próprio se ganhar outro mantenedor, dependências pesadas ou for adotado pelos maintainers do Paperclip.
 
 ### 2. Biblioteca comum sem efeitos colaterais
 
-O core não é plugin: não chama `definePlugin`/`runWorker`, não registra nada ao ser importado. Exporta uma função que o plugin chama no `setup`. `@paperclipai/plugin-sdk` é `peerDependency` do core e dos plugins (o host fornece a versão).
+O core não é plugin: não chama `definePlugin`/`runWorker`, não registra nada ao ser importado. Exporta uma função que o plugin chama no `setup`. No core, `@paperclipai/plugin-sdk` entra só como tipos (`import type`) e `devDependency`; nos plugins, segue o padrão dos plugins da comunidade (`peerDependency`), com o build pela preset do SDK.
 
 Arquitetura portas e adaptadores:
 
@@ -199,7 +199,7 @@ O worker não recebe variáveis de ambiente (fato 1), então o fator III (config
 
 | Fator | Como fica |
 | --- | --- |
-| I. Base de código | Um repositório, três pacotes, publicados por versão. |
+| I. Base de código | Um repositório, três pacotes; os dois plugins publicados por versão, a biblioteca embutida neles. |
 | II. Dependências | Explícitas; SDK como `peerDependency`; lockfile commitado no repositório próprio. |
 | III. Configuração | Schema por empresa no host; segredos por `secret-ref`. |
 | IV. Serviços de apoio | ntfy e apprise-api tratados como recursos anexados por URL; trocar de servidor = trocar configuração. |
@@ -392,4 +392,4 @@ Precisa de desenho de segurança próprio antes de implementar:
 - **Condição de `issue.comment.created`** ("autor não é o responsável"): confirmar os campos disponíveis no payload.
 - **Custo do estado**: cada evento lê e grava o anel de dedupe. Aceitável no volume esperado; revisar se passar de dezenas de eventos por minuto.
 - **API do SDK instável**: o SDK segue a versão do Paperclip (calendário). Fixar `minimumHostVersion` e rodar o CI contra `latest` e `beta` do `@paperclipai/plugin-sdk`.
-- **Escopo npm**: definir o escopo do core (`@rodolphobrock`?) antes da fase 1.
+- **Nomes no npm**: `paperclip-plugin-ntfy` e `paperclip-plugin-apprise` estavam livres em 2026-09-27; conferir de novo antes do primeiro publish.
