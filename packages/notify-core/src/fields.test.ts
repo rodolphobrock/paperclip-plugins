@@ -157,3 +157,18 @@ describe("parseWithBase", () => {
     expect(() => parseWithBase("x", () => ({}))).toThrow("config must be an object");
   });
 });
+
+describe("duplicate extra headers", () => {
+  it("rejects names that differ only in case", () => {
+    const issues: string[] = [];
+    const headers = parseExtraHeaders(
+      [
+        { name: "CF-Access-Client-Id", value: secret("a") },
+        { name: "cf-access-client-id", value: secret("b") },
+      ],
+      issues,
+    );
+    expect(headers).toHaveLength(1);
+    expect(issues).toEqual(["extraHeaders.1.name duplicates another header"]);
+  });
+});

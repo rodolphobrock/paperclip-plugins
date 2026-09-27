@@ -200,3 +200,9 @@ describe("delivery settings", () => {
     expect(issuesOf(raw).join("\n")).toMatch(pattern);
   });
 });
+
+describe("paperclipBaseUrl hygiene", () => {
+  it.each(["https://h/pc?x=1", "https://h/pc#top", "https://user:pw@h/pc"])("rejects %j", (url) => {
+    expect(() => parseBaseConfig({ paperclipBaseUrl: url })).toThrow(/paperclipBaseUrl/);
+  });
+});

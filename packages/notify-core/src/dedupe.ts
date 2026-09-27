@@ -38,6 +38,15 @@ export class DedupeStore {
     this.#ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   }
 
+  /** One state read: true when any key was seen; otherwise records the keys. */
+  async checkAndRemember(keys: string[], now: number): Promise<boolean> {
+    const live = this.#live(await this.#load(), now);
+    if (live.some((entry) => keys.includes(entry.k))) return true;
+    const next = [...live, ...keys.map((k) => ({ k, t: now }))].slice(-this.#capacity);
+    await this.#state.set(next);
+    return false;
+  }
+
   async seen(keys: string[], now: number): Promise<boolean> {
     const live = this.#live(await this.#load(), now);
     return live.some((entry) => keys.includes(entry.k));

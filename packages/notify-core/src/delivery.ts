@@ -14,8 +14,14 @@ import type { Notification, SendResult } from "./types.js";
 
 const MINUTE_MS = 60_000;
 const FIRST_BACKOFF_MS = 30_000;
+/**
+ * Sends per company per drain run. Bounds how long a drain holds the company lock, so events
+ * queued behind it are handled well within the host's invocation scope.
+ */
+export const MAX_SENDS_PER_DRAIN = 20;
 
-export type HoldReason = "quiet" | "rate_limit";
+/** `backlog`: a digest is already pending, so later items join it to keep their order. */
+export type HoldReason = "quiet" | "rate_limit" | "backlog";
 export type DropReason = "exhausted" | "expired" | "permanent" | "disabled" | "queue_full";
 
 /** Side effects of delivery (logs, metrics, status, activity log), implemented by the notifier. */
@@ -25,7 +31,7 @@ export interface DeliveryObserver {
   queued(n: Notification, reason: HoldReason): void | Promise<void>;
   retry(n: Notification, attempt: number, error: string): void | Promise<void>;
   dropped(n: Notification, reason: DropReason, error?: string): void | Promise<void>;
-  digested(companyId: string, count: number): void | Promise<void>;
+  digested(summary: Notification, count: number): void | Promise<void>;
 }
 
 export interface DeliveryDeps<C extends BaseConfig> {
@@ -54,6 +60,10 @@ export function backoffMs(attempt: number): number {
 export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
   const { observer } = deps;
 
+  /** "urgent always passes" (spec decision 6): past quiet hours and past an empty bucket. */
+  const urgentPasses = (n: Notification, config: C) =>
+    n.severity === "urgent" && config.quietHours.allowUrgent;
+
   const hold = async (n: Notification, reason: HoldReason, now: number) => {
     const queues = deps.queuesFor(n.companyId);
     const digest = (await queues.readDigest()) ?? { since: now, items: [] };
@@ -72,20 +82,18 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
   /** Called for each new notification, inside the company lock. */
   const deliver = async (n: Notification, config: C): Promise<void> => {
     const now = deps.clock();
-    // "urgent always passes" (spec decision 6): past quiet hours and past an empty bucket.
-    const urgentPasses = n.severity === "urgent" && config.quietHours.allowUrgent;
-    if (isQuiet(new Date(now), config.quietHours) && !urgentPasses) {
-      return hold(n, "quiet", now);
-    }
+    const passes = urgentPasses(n, config);
+    if (isQuiet(new Date(now), config.quietHours) && !passes) return hold(n, "quiet", now);
+    const queues = deps.queuesFor(n.companyId);
+    if (!passes && (await queues.readDigest()) !== null) return hold(n, "backlog", now);
     const hasToken = deps.bucket.take(n.companyId, config.rateLimit.perMinute, now);
-    if (!hasToken && !urgentPasses) return hold(n, "rate_limit", now);
+    if (!hasToken && !passes) return hold(n, "rate_limit", now);
 
     const result = await deps.send(n, config);
     if (result.ok) return observer.sent(n);
     if (!result.retryable) return observer.failed(n, result.error);
     if (config.retry.maxAttempts <= 1) return observer.dropped(n, "exhausted", result.error);
 
-    const queues = deps.queuesFor(n.companyId);
     const item = scheduleRetry(
       { notification: n, attempts: 1, firstAt: now, lastError: result.error },
       result,
@@ -94,39 +102,75 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
     const { list, dropped } = pushCapped(await queues.readRetry(), item, RETRY_CAP);
     await queues.writeRetry(list);
     await deps.pending.add(n.companyId);
-    for (const old of dropped)
+    for (const old of dropped) {
       await observer.dropped(old.notification, "queue_full", old.lastError);
+    }
     await observer.retry(n, 1, result.error);
   };
 
-  const drainRetries = async (queues: CompanyQueues, config: C, now: number) => {
-    const keep: RetryItem[] = [];
-    for (const item of await queues.readRetry()) {
+  const drainRetries = async (
+    companyId: string,
+    queues: CompanyQueues,
+    config: C,
+    now: number,
+    budget: { sends: number },
+  ) => {
+    let items = await queues.readRetry();
+    // Written after every item, so an interrupted drain never resends what it delivered.
+    const update = async (item: RetryItem, next: RetryItem | null) => {
+      items =
+        next === null ? items.filter((i) => i !== item) : items.map((i) => (i === item ? next : i));
+      await queues.writeRetry(items);
+    };
+    const quiet = isQuiet(new Date(now), config.quietHours);
+
+    for (const item of [...items]) {
+      const n = item.notification;
       if (now - item.firstAt >= config.retry.maxAgeMinutes * MINUTE_MS) {
-        await observer.dropped(item.notification, "expired", item.lastError);
+        await update(item, null);
+        await observer.dropped(n, "expired", item.lastError);
         continue;
       }
-      if (item.nextAt > now) {
-        keep.push(item);
+      if (item.nextAt > now) continue;
+      const passes = urgentPasses(n, config);
+      if (quiet && !passes) {
+        // Quiet hours outlast the retry window; the digest delivers it when they end.
+        await update(item, null);
+        await hold(n, "quiet", now);
         continue;
       }
-      const result = await deps.send(item.notification, config);
+      if (budget.sends <= 0) continue;
+      if (!deps.bucket.take(companyId, config.rateLimit.perMinute, now) && !passes) continue;
+      budget.sends -= 1;
+
+      const result = await deps.send(n, config);
       if (result.ok) {
-        await observer.sent(item.notification);
+        await update(item, null);
+        await observer.sent(n);
       } else if (!result.retryable) {
-        await observer.dropped(item.notification, "permanent", result.error);
+        await update(item, null);
+        await observer.dropped(n, "permanent", result.error);
       } else if (item.attempts + 1 >= config.retry.maxAttempts) {
-        await observer.dropped(item.notification, "exhausted", result.error);
+        await update(item, null);
+        await observer.dropped(n, "exhausted", result.error);
       } else {
         const attempts = item.attempts + 1;
-        keep.push(scheduleRetry({ ...item, attempts, lastError: result.error }, result, now));
-        await observer.retry(item.notification, attempts, result.error);
+        await update(
+          item,
+          scheduleRetry({ ...item, attempts, lastError: result.error }, result, now),
+        );
+        await observer.retry(n, attempts, result.error);
       }
     }
-    await queues.writeRetry(keep);
   };
 
-  const drainDigest = async (companyId: string, queues: CompanyQueues, config: C, now: number) => {
+  const drainDigest = async (
+    companyId: string,
+    queues: CompanyQueues,
+    config: C,
+    now: number,
+    budget: { sends: number },
+  ) => {
     const digest = await queues.readDigest();
     if (digest === null) return;
     const maxAgeMs = config.retry.maxAgeMinutes * MINUTE_MS;
@@ -137,7 +181,9 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
     }
     if (isQuiet(new Date(now), config.quietHours)) return;
     if (now - digest.since < config.rateLimit.digestWindowMinutes * MINUTE_MS) return;
+    if (budget.sends <= 0) return;
     if (!deps.bucket.take(companyId, config.rateLimit.perMinute, now)) return;
+    budget.sends -= 1;
 
     const summary = buildDigest(digest.items, digest.since, config.quietHours.timezone, companyId);
     const url = await deps.inboxUrl(companyId, config);
@@ -146,7 +192,7 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
     const result = await deps.send(summary, config);
     if (result.ok) {
       await queues.writeDigest(null);
-      await observer.digested(companyId, digest.items.length);
+      await observer.digested(summary, digest.items.length);
       await observer.sent(summary);
     } else if (!result.retryable) {
       await queues.writeDigest(null);
@@ -178,8 +224,9 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
       await queues.writeDigest(null);
     } else {
       const now = deps.clock();
-      await drainRetries(queues, config, now);
-      await drainDigest(companyId, queues, config, now);
+      const budget = { sends: MAX_SENDS_PER_DRAIN };
+      await drainRetries(companyId, queues, config, now, budget);
+      await drainDigest(companyId, queues, config, now, budget);
     }
     if (await queues.isEmpty()) await deps.pending.remove(companyId);
   };

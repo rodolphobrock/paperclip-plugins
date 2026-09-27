@@ -1,3 +1,5 @@
 import { createSettingsPage } from "@paperclip-plugins/notify-core/ui";
 
-export const NtfySettingsPage = createSettingsPage("ntfy");
+export const NtfySettingsPage = createSettingsPage("ntfy", {
+  setupHint: "set a topic in the ntfy plugin settings",
+});

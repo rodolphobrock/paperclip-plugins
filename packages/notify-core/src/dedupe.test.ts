@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DedupeStore, type StatePort, semanticKey } from "./dedupe.js";
 
 function memoryState(initial: unknown = null): StatePort & { value: unknown } {
@@ -79,4 +79,17 @@ describe("DedupeStore", () => {
       expect(await store.seen(["zzz"], 11)).toBe(true);
     },
   );
+});
+
+describe("checkAndRemember", () => {
+  it("reads state once and writes only for new keys", async () => {
+    const state = memoryState();
+    const get = vi.spyOn(state, "get");
+    const set = vi.spyOn(state, "set");
+    const store = new DedupeStore(state);
+    expect(await store.checkAndRemember(["a"], 1)).toBe(false);
+    expect(await store.checkAndRemember(["a"], 2)).toBe(true);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenCalledTimes(1);
+  });
 });

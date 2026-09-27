@@ -160,9 +160,12 @@ function parseBaseUrl(value: unknown, issues: string[]): string | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value === "string" && URL.canParse(value)) {
     const url = new URL(value);
-    if (url.protocol === "http:" || url.protocol === "https:") return value.replace(/\/+$/, "");
+    const plain = !url.search && !url.hash && !url.username && !url.password;
+    if ((url.protocol === "http:" || url.protocol === "https:") && plain) {
+      return value.replace(/\/+$/, "");
+    }
   }
-  issues.push("paperclipBaseUrl must be an http(s) URL");
+  issues.push("paperclipBaseUrl must be an http(s) URL without query, fragment or credentials");
   return undefined;
 }
 

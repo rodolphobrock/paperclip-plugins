@@ -53,7 +53,11 @@ export function parseExtraHeaders(value: unknown, issues: string[]): ExtraHeader
       issues.push(`${path}.name must be a header name other than ${RESERVED_HEADERS.join(", ")}`);
     }
     if (!isSecretRef(secret)) issues.push(`${path}.value must be a secret reference`);
-    if (validName && isSecretRef(secret)) headers.push({ name, value: secret });
+    // Header names are case-insensitive; a second value would be merged into the first.
+    const duplicate =
+      validName && headers.some((h) => h.name.toLowerCase() === (name as string).toLowerCase());
+    if (duplicate) issues.push(`${path}.name duplicates another header`);
+    if (validName && !duplicate && isSecretRef(secret)) headers.push({ name, value: secret });
   });
   return headers;
 }

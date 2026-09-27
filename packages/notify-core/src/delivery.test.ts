@@ -49,7 +49,7 @@ function setup() {
     queued: (x, r) => void calls.push(`queued ${x.key} ${r}`),
     retry: (x, a) => void calls.push(`retry ${x.key} ${a}`),
     dropped: (x, r) => void calls.push(`dropped ${x.key} ${r}`),
-    digested: (c, count) => void calls.push(`digested ${c} ${count}`),
+    digested: (s, count) => void calls.push(`digested ${s.companyId} ${count}`),
   };
   return createDelivery<BaseConfig>({
     clock: () => now,
@@ -341,5 +341,95 @@ describe("review fixes", () => {
     expect(drained).toEqual(["ok"]);
     expect(errors).toEqual(["gone: scope denied", "broken: state RPC failed"]);
     expect(await new PendingIndex(pendingState).list()).toEqual(["broken"]);
+  });
+});
+
+describe("backlog fixes", () => {
+  const retryItems = async () =>
+    new CompanyQueues({ retry: retryState, digest: digestState }).readRetry();
+
+  it("moves due retries into the digest during quiet hours, but retries urgent ones", async () => {
+    const delivery = setup();
+    results = [
+      { ok: false, retryable: true, error: "HTTP 503" },
+      { ok: false, retryable: true, error: "HTTP 503" },
+    ];
+    await delivery.deliver(n("a"), parseBaseConfig({}));
+    await delivery.deliver(n("u", { severity: "urgent" }), parseBaseConfig({}));
+    config = parseBaseConfig({ quietHours: { enabled: true, start: "12:00", end: "13:00" } });
+    calls = [];
+    now += MIN;
+    await delivery.drain();
+    expect(calls).toEqual(["queued a quiet", "sent u"]);
+    expect(await retryItems()).toEqual([]);
+  });
+
+  it("keeps due retries without spending an attempt when the rate limit is empty", async () => {
+    config = parseBaseConfig({ rateLimit: { perMinute: 1 } });
+    const delivery = setup();
+    results = [{ ok: false, retryable: true, error: "HTTP 503" }];
+    await delivery.deliver(n("a"), config);
+    now += 31_000;
+    await delivery.drain();
+    expect(sent).toHaveLength(1);
+    expect((await retryItems())[0]?.attempts).toBe(1);
+  });
+
+  it("persists the retry queue after each item", async () => {
+    const delivery = setup();
+    results = [
+      { ok: false, retryable: true, error: "HTTP 503" },
+      { ok: false, retryable: true, error: "HTTP 503" },
+    ];
+    await delivery.deliver(n("a"), parseBaseConfig({}));
+    await delivery.deliver(n("b"), parseBaseConfig({}));
+    now += MIN;
+    const keysWhenSendingB: string[] = [];
+    results = [{ ok: true }, { ok: true }];
+    const delivery2 = createDelivery<BaseConfig>({
+      clock: () => now,
+      bucket: new TokenBucket(),
+      send: async (x) => {
+        sent.push(x);
+        if (x.key === "b") {
+          const items = (retryState.value ?? []) as { notification: Notification }[];
+          keysWhenSendingB.push(...items.map((i) => i.notification.key));
+        }
+        return { ok: true };
+      },
+      loadConfig: async () => config,
+      queuesFor: () => new CompanyQueues({ retry: retryState, digest: digestState }),
+      pending: new PendingIndex(pendingState),
+      inboxUrl: async () => undefined,
+      withLock: (_c, fn) => fn(),
+      observer: { sent() {}, failed() {}, queued() {}, retry() {}, dropped() {}, digested() {} },
+    });
+    void delivery;
+    await delivery2.drain();
+    expect(keysWhenSendingB).toEqual(["b"]);
+  });
+
+  it("sends at most 20 items per company per drain", async () => {
+    const delivery = setup();
+    results = Array.from({ length: 25 }, () => ({ ok: false, retryable: true, error: "HTTP 503" }));
+    config = parseBaseConfig({ rateLimit: { perMinute: 600 } });
+    for (let i = 0; i < 25; i++) await delivery.deliver(n(`k${i}`), config);
+    sent = [];
+    now += MIN;
+    await delivery.drain();
+    expect(sent).toHaveLength(20);
+    expect(await retryItems()).toHaveLength(5);
+  });
+
+  it("keeps order: new items join a pending digest", async () => {
+    config = parseBaseConfig({ rateLimit: { perMinute: 1, digestWindowMinutes: 1 } });
+    const delivery = setup();
+    await delivery.deliver(n("a"), config);
+    await delivery.deliver(n("b"), config);
+    now += MIN;
+    await delivery.deliver(n("c"), config);
+    expect(calls).toEqual(["sent a", "queued b rate_limit", "queued c backlog"]);
+    await delivery.drain();
+    expect(sent.at(-1)?.title).toBe("2 notifications since 12:00");
   });
 });

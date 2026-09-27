@@ -529,3 +529,67 @@ describe("delivery review fixes", () => {
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("backlog fixes (notifier)", () => {
+  it("expires cached secrets after a minute", async () => {
+    const { harness, sent } = await setup(CONFIGURED);
+    const resolve = vi.spyOn(harness.ctx.secrets, "resolve").mockResolvedValue("v");
+    await harness.emit(...runFailed());
+    const ref = { type: "secret_ref", secretId: "s" } as const;
+    await sent[0]?.deps.resolveSecret(ref, "x");
+    clock.now += 59_000;
+    await sent[0]?.deps.resolveSecret(ref, "x");
+    clock.now += 2_000;
+    await sent[0]?.deps.resolveSecret(ref, "x");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("throttles test notifications and keeps them out of health", async () => {
+    const failing = fakeSender();
+    failing.sender.sendTest = async () => ({ ok: false, retryable: false, error: "HTTP 401" });
+    const { harness, notifier } = await setup(CONFIGURED, failing);
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toEqual({
+      ok: false,
+      error: "HTTP 401",
+    });
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toEqual({
+      ok: false,
+      error: "Wait a few seconds between test notifications",
+    });
+    clock.now += 10_000;
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toMatchObject({
+      error: "HTTP 401",
+    });
+    expect((await notifier.health()).status).toBe("ok");
+  });
+
+  it("degrades health on the total retry backlog across companies", async () => {
+    const { harness, notifier } = await setup(
+      { ...CONFIGURED, rateLimit: { perMinute: 600 } },
+      fakeSender({ ok: false, retryable: true, error: "HTTP 503" }),
+    );
+    for (let i = 0; i < 102; i++) {
+      await harness.emit(
+        "agent.run.failed",
+        { runId: `r${i}`, agentId: "ag-1", status: "failed" },
+        { entityId: `r${i}`, companyId: i % 2 === 0 ? "co-a" : "co-b" },
+      );
+    }
+    clock.now += 6 * 60_000;
+    expect(await notifier.health()).toMatchObject({ status: "degraded" });
+  });
+
+  it("tags the digest metric like the other delivery metrics", async () => {
+    const quiet = { ...CONFIGURED, quietHours: { enabled: true, start: "11:00", end: "13:00" } };
+    const { harness } = await setup(quiet);
+    await harness.emit(...runFailed());
+    clock.now = Date.parse("2026-09-27T13:00:00Z");
+    await harness.runJob("delivery-drain");
+    expect(harness.metrics).toContainEqual(
+      expect.objectContaining({
+        name: "notify.digested",
+        tags: { eventType: "digest", severity: "high" },
+      }),
+    );
+  });
+});

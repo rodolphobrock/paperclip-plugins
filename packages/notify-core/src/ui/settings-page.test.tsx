@@ -80,3 +80,27 @@ describe("createSettingsPage", () => {
     expect(html).not.toContain("Not configured");
   });
 });
+
+describe("settings page details", () => {
+  it("shows the plugin's own setup hint", async () => {
+    const { createSettingsPage: create } = await import("./settings-page.js");
+    const Hinted = create("ntfy", { setupHint: "set a topic in the plugin settings" });
+    hooks.status = { configured: false, enabled: false };
+    expect(renderToStaticMarkup(<Hinted context={context} />)).toContain(
+      "set a topic in the plugin settings",
+    );
+  });
+
+  it("builds toasts without credentials from thrown errors", async () => {
+    const { testToast } = await import("./settings-page.js");
+    expect(testToast({ ok: true })).toEqual({ title: "Test notification sent", tone: "success" });
+    expect(testToast({ ok: false, error: "HTTP 401" })).toEqual({
+      title: "Test notification failed",
+      body: "HTTP 401",
+      tone: "error",
+    });
+    const thrown = testToast(new Error("POST https://bot:hunter2@h/x failed"));
+    expect(thrown.body).not.toContain("hunter2");
+    expect(testToast("weird").body).toBe("weird");
+  });
+});
