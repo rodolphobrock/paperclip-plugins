@@ -31,7 +31,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # --wait covers both: ntfy's healthcheck is in the compose file, apprise's in its image.
+      # --wait waits for both healthchecks in the compose file (apprise: until /status answers).
       - name: Start ntfy and apprise-api
         run: docker compose -f examples/notify/docker-compose.yml up -d --wait --wait-timeout 120
 
