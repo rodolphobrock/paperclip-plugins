@@ -83,7 +83,7 @@ describe("classifyError review fixes", () => {
     expect(result).toEqual({
       ok: false,
       retryable: false,
-      error: "secret resolution failed (auth.token)",
+      error: "secret resolution failed (auth.token): unavailable",
     });
   });
 
@@ -93,5 +93,24 @@ describe("classifyError review fixes", () => {
     const res = new Response("bad token=abc123", { status: 400 });
     const classified = await classifyResponse(res, NOW);
     expect(classified.ok || classified.error).not.toContain("abc123");
+  });
+});
+
+describe("SecretResolutionError reasons", () => {
+  it.each([
+    [
+      "Secret is not bound to plugin:x at extraHeaders.0.value",
+      "not bound to this plugin at this config path",
+    ],
+    ["Rate limit exceeded for secret resolution", "rate limited, try again in a minute"],
+    ["Plugin secret reference is ambiguous; pass configPath", "ambiguous reference"],
+    ["Invalid secret reference for plugin: hunter2. Use a binding", "invalid secret reference"],
+    ["Secret not found", "secret not found or deleted"],
+    ["Secret has been deleted", "secret not found or deleted"],
+  ])("maps %j to a fixed reason", async (message, reason) => {
+    const { SecretResolutionError } = await import("./types.js");
+    const error = new SecretResolutionError("extraHeaders.0.value", new Error(message));
+    expect(error.message).toBe(`secret resolution failed (extraHeaders.0.value): ${reason}`);
+    expect(error.message).not.toContain("hunter2");
   });
 });

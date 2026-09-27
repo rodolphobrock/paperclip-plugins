@@ -39,10 +39,25 @@ export class SecretResolutionError extends Error {
   readonly configPath: string;
 
   constructor(configPath: string, cause?: unknown) {
-    super(`secret resolution failed (${configPath})`, { cause });
+    super(`secret resolution failed (${configPath}): ${secretFailureReason(cause)}`, { cause });
     this.name = "SecretResolutionError";
     this.configPath = configPath;
   }
+}
+
+/**
+ * A fixed phrase for the host's error. The host's own message is never copied: for a legacy
+ * plain-string reference it echoes the configured value.
+ */
+function secretFailureReason(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  if (/not bound|binding_missing/i.test(message))
+    return "not bound to this plugin at this config path";
+  if (/rate limit/i.test(message)) return "rate limited, try again in a minute";
+  if (/ambiguous/i.test(message)) return "ambiguous reference";
+  if (/invalid secret reference/i.test(message)) return "invalid secret reference";
+  if (/not found|deleted/i.test(message)) return "secret not found or deleted";
+  return "unavailable";
 }
 
 /** The subset of `fetch` both `ctx.http.fetch` and the global fetch provide. */

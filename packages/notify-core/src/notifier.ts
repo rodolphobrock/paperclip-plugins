@@ -1,13 +1,15 @@
 import type { PluginContext, PluginEvent, ScopeKey } from "@paperclipai/plugin-sdk";
 import { SUBSCRIBED_EVENT_TYPES } from "./catalog.js";
-import type { BaseConfig } from "./config.js";
+import { type BaseConfig, ConfigError } from "./config.js";
 import { DedupeStore, semanticKey } from "./dedupe.js";
 import { collectFacts, type HostPorts } from "./enrich.js";
-import { isRecord } from "./guards.js";
+import { isRecord, readString } from "./guards.js";
 import { classifyError } from "./http-result.js";
 import { buildDeepLink, PrefixCache } from "./links.js";
 import { mapEvent } from "./mappers.js";
 import { applyPolicy } from "./policy.js";
+import { redact } from "./redact.js";
+import { type StatusSnapshot, StatusStore } from "./status.js";
 import {
   type FetchLike,
   type Notification,
@@ -59,19 +61,50 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         ctx.metrics.write(name, 1, tags).catch(() => undefined);
       };
 
-      const loadConfig = async (companyId: string): Promise<C | null> => {
+      const readConfig = async (companyId: string): Promise<ConfigRead<C>> => {
         const raw = await ctx.config.get(companyId);
-        if (!isRecord(raw) || Object.keys(raw).length === 0) return null;
+        if (!isRecord(raw) || Object.keys(raw).length === 0) return { state: "missing" };
         try {
-          const config = opts.parseConfig(raw);
-          warned.delete(`invalid:${companyId}`);
-          return config.enabled ? config : null;
+          return { state: "ok", config: opts.parseConfig(raw) };
         } catch (error) {
+          return {
+            state: "invalid",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      };
+
+      const loadConfig = async (companyId: string): Promise<C | null> => {
+        const read = await readConfig(companyId);
+        if (read.state === "missing") return null;
+        if (read.state === "invalid") {
           warnOnce(`invalid:${companyId}`, "notify.invalid_config", {
             companyId,
-            error: error instanceof Error ? error.message : String(error),
+            error: read.error,
           });
           return null;
+        }
+        warned.delete(`invalid:${companyId}`);
+        return read.config.enabled ? read.config : null;
+      };
+
+      const depsFor = (config: C, companyId: string): SenderDeps => ({
+        fetch: selectFetch(ctx, config),
+        resolveSecret: (ref, configPath) => resolveSecret(ref, configPath, companyId),
+        logger: ctx.logger,
+      });
+
+      const recordStatus = async (companyId: string, error: string | undefined) => {
+        const store = new StatusStore(stateOf(ctx, companyId, "status"));
+        const at = new Date(clock());
+        try {
+          if (error === undefined) await store.recordSuccess(at);
+          else await store.recordError(at, error);
+        } catch (failure) {
+          ctx.logger.warn("notify.status_write_failed", {
+            companyId,
+            error: failure instanceof Error ? failure.message : String(failure),
+          });
         }
       };
 
@@ -140,12 +173,10 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
           }
         }
 
-        const deps: SenderDeps = {
-          fetch: selectFetch(ctx, config),
-          resolveSecret: (ref, configPath) => resolveSecret(ref, configPath, companyId),
-          logger: ctx.logger,
-        };
-        const result = await opts.sender.send(notification, config, deps).catch(classifyError);
+        const result = await opts.sender
+          .send(notification, config, depsFor(config, companyId))
+          .catch(classifyError);
+        await recordStatus(companyId, result.ok ? undefined : result.error);
         const logTags = { ...tags, severity: notification.severity, sender: opts.sender.name };
         if (result.ok) {
           ctx.logger.info("notify.sent", { ...logTags, key });
@@ -197,16 +228,73 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
       for (const eventType of SUBSCRIBED_EVENT_TYPES) {
         ctx.events.on(eventType, enqueue);
       }
+
+      // The host puts the authorized company into params.companyId for the settings page.
+      ctx.data.register("status", async (params): Promise<StatusSnapshot> => {
+        const companyId = companyOf(params);
+        if (companyId === undefined) return { configured: false, enabled: false };
+        const read = await readConfig(companyId);
+        const stored = await new StatusStore(stateOf(ctx, companyId, "status")).read();
+        const snapshot: StatusSnapshot = {
+          configured: read.state !== "missing",
+          enabled: read.state === "ok" && read.config.enabled,
+          ...stored,
+        };
+        if (read.state === "invalid") snapshot.configError = read.error;
+        return snapshot;
+      });
+
+      // Resolves secrets with the right company, which the host's "Test configuration" cannot.
+      ctx.actions.register("send-test", async (params, context): Promise<TestResult> => {
+        const companyId = context.companyId ?? companyOf(params);
+        if (companyId === undefined) return { ok: false, error: "Missing company" };
+        const read = await readConfig(companyId);
+        if (read.state === "missing")
+          return { ok: false, error: "Not configured for this company" };
+        if (read.state === "invalid") return { ok: false, error: read.error };
+
+        const result = await opts.sender
+          .sendTest(read.config, depsFor(read.config, companyId))
+          .catch(classifyError);
+        await recordStatus(companyId, result.ok ? undefined : result.error);
+        ctx.logger.info("notify.test", { companyId, ok: result.ok });
+        return result.ok ? { ok: true } : { ok: false, error: redact(result.error) };
+      });
     },
   };
 }
 
-function stateOf(ctx: PluginContext, companyId: string) {
+/** For `onValidateConfig`: structural checks only (the host passes no company, so no secrets). */
+export async function validateConfig<C>(
+  parseConfig: (raw: unknown) => C,
+  raw: unknown,
+): Promise<{ ok: true } | { ok: false; errors: string[] }> {
+  try {
+    parseConfig(raw);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ConfigError) return { ok: false, errors: error.issues };
+    return { ok: false, errors: [error instanceof Error ? error.message : String(error)] };
+  }
+}
+
+type ConfigRead<C> =
+  | { state: "missing" }
+  | { state: "invalid"; error: string }
+  | { state: "ok"; config: C };
+
+export type TestResult = { ok: true } | { ok: false; error: string };
+
+function companyOf(params: Record<string, unknown>): string | undefined {
+  return readString(params, "companyId");
+}
+
+function stateOf(ctx: PluginContext, companyId: string, stateKey: "dedupe" | "status" = "dedupe") {
   const scope: ScopeKey = {
     scopeKind: "company",
     scopeId: companyId,
     namespace: "notify",
-    stateKey: "dedupe",
+    stateKey,
   };
   return {
     get: () => ctx.state.get(scope),

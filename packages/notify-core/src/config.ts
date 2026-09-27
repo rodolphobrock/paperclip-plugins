@@ -116,7 +116,8 @@ export const baseConfigSchema: { properties: Record<string, JsonSchema> } = {
     },
     paperclipBaseUrl: {
       type: "string",
-      format: "uri",
+      // A pattern, not format "uri": the host form saves "" for a cleared field.
+      pattern: "^(https?://\\S+)?$",
       title: "Paperclip base URL",
       description: "Public URL of this Paperclip instance, used for links in notifications.",
     },

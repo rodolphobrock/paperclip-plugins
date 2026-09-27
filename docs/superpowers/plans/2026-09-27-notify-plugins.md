@@ -319,13 +319,17 @@ Cobertura do core ≥ 90% ao fim da fase (`vitest.config.ts` com `thresholds`). 
 
 ### Fase 3 — Plugin ntfy v0.1
 
-| Tarefa | Arquivos (`packages/plugin-ntfy/src/`) | Testes |
-| --- | --- | --- |
-| 3.1 Config e schema | `config.ts`, `schema.ts` | `parseNtfyConfig`: `topic` obrigatório, `serverUrl` padrão, `auth` por modo, `extraHeaders` |
-| 3.2 Sender | `sender.ts` | contrato: URL `POST {serverUrl}/{topic}`, `topicsBySeverity`, headers `Title`/`Priority`/`Tags`/`Click`/`Markdown`/`Icon`/`Authorization` (Bearer e Basic), headers extras resolvidos; título com acento em header (codificação RFC 2047 ou `X-Title` com UTF-8, decidir lendo a doc do ntfy); erro de secret não vaza valor |
-| 3.3 Rede | `fetch-selector.ts` no core | `allowPrivateNetwork` escolhe `ctx.http.fetch` ou `fetch` global com timeout de 10 s |
-| 3.4 Manifest e worker | `manifest.ts`, `worker.ts` | capabilities da decisão 4; `instanceConfigSchema`; harness `emit` → uma chamada de `fetch` por evento padrão; `performAction("send-test")` |
-| 3.5 Página | `ui/index.tsx`, `ctx.data.register("status")` | slot `companySettingsPage` `routePath: "ntfy"`; harness `getData("status")` |
+Envio por **JSON na raiz do servidor** (`POST {serverUrl}/` com `{ topic, message, title, priority, tags, click?, markdown?, icon? }`), não por headers: a [doc do ntfy](https://docs.ntfy.sh/publish/#publish-as-json) aceita todos os campos da decisão 11 em JSON, e o corpo JSON leva título com acento em UTF-8 sem codificação RFC 2047. Autenticação e headers extras continuam em headers.
+
+| Tarefa | Arquivos | Interface | Testes |
+| --- | --- | --- | --- |
+| 3.1 Config | `plugin-ntfy/src/config.ts` | `NtfyConfig extends BaseConfig`; `parseNtfyConfig(raw): NtfyConfig`; `ntfyConfigSchema` (JSON Schema completo, com `baseConfigSchema`) | `topic` obrigatório e válido (`[A-Za-z0-9_-]{1,64}`); `serverUrl` padrão `https://ntfy.sh`, http(s), sem barra final; `topicsBySeverity`; `auth` `none`/`token` (exige `token` secret-ref)/`basic` (exige `username` e `password` secret-ref); `extraHeaders` com nome de header válido e fora da lista reservada (`authorization`, `content-type`, `content-length`, `host`); `markdown`; `iconUrl` http(s); erros do core e do ntfy juntos num `ConfigError` |
+| 3.2 Sender | `plugin-ntfy/src/sender.ts` | `ntfySender: NotificationSender<NtfyConfig>`; `PRIORITY_BY_SEVERITY`, `TAG_BY_TONE` | contrato do corpo e dos headers exatos; prioridade por severidade (2/3/4/5); tag de emoji por tom + tags da notificação; `topicsBySeverity`; `Authorization: Bearer` e `Basic base64(user:pass)`; headers extras resolvidos com `configPath` `extraHeaders[i].value`; `click` só com URL; `markdown`/`icon` só quando configurados; classificação de resposta (401 permanente, 429/503 retentável); `SecretResolutionError` vira falha permanente sem vazar valor; `sendTest` envia mensagem fixa de prioridade 3 |
+| 3.3 Ação de teste e status (core) | `notify-core/src/status.ts`, `notifier.ts` | `createNotifier` registra `ctx.actions.register("send-test")` e `ctx.data.register("status")`; `StatusSnapshot = { configured, enabled, lastSentAt?, lastError? }` em `ctx.state` (`company`, `notify`, `status`) | harness: `performAction("send-test", {}, { companyId })` chama `sendTest` com secrets da empresa e devolve `{ ok, error? }`; empresa sem config → `{ ok: false, error: "not configured" }`; `getData("status", { companyId })` reflete último envio e último erro; erro no status nunca contém secret |
+| 3.4 Manifest e worker | `plugin-ntfy/src/manifest.ts`, `worker.ts` | capabilities da decisão 4; `instanceConfigSchema: ntfyConfigSchema`; slot `companySettingsPage` | harness: evento padrão → uma chamada de `ctx.http.fetch` com o corpo esperado; empresa sem config → nenhuma; handlers duplicados → uma; `onValidateConfig` valida sem resolver secrets |
+| 3.5 Página | `plugin-ntfy/src/ui/index.tsx` | componente `NtfySettingsPage` (status + botão de teste) | build do bundle de UI; teste do componente fica para a fase 6 (ponta a ponta) |
+
+A tarefa 3.3 original (seleção de `fetch`) já foi feita na fase 2.
 
 ### Fase 4 — Core v0.2: entrega
 
