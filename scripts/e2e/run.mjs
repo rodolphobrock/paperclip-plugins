@@ -43,6 +43,12 @@ async function call(method, path, body) {
   return { status: res.status, ok: res.ok, json };
 }
 
+// Paperclip requires a reason to enter "blocked" (blockers, an approval or an unblock descriptor).
+const BLOCKED = {
+  status: "blocked",
+  unblockDescriptor: { owner: "board", action: "Review the E2E issue" },
+};
+
 const mockRequests = async () => (await fetch(`${MOCK}/__requests`)).json();
 const mockStatus = (code) => fetch(`${MOCK}/__status?code=${code}`, { method: "POST" });
 
@@ -128,7 +134,7 @@ async function main() {
     title: "E2E blocked issue",
   });
   check("issue created", issue.ok);
-  const blocked = await call("PATCH", `/issues/${issue.json.id}`, { status: "blocked" });
+  const blocked = await call("PATCH", `/issues/${issue.json.id}`, BLOCKED);
   check("issue blocked", blocked.ok);
   const title = `${issue.json.identifier} is blocked`;
   const [ntfy] = await waitFor(
@@ -185,7 +191,7 @@ async function main() {
   const issue2 = await call("POST", `/companies/${company.id}/issues`, {
     title: "E2E outage issue",
   });
-  await call("PATCH", `/issues/${issue2.json.id}`, { status: "blocked" });
+  await call("PATCH", `/issues/${issue2.json.id}`, BLOCKED);
   const title2 = `${issue2.json.identifier} is blocked`;
   await waitFor("first attempt during the outage", (all) =>
     ntfyRequests(all, title2).find((r) => r.replied === 503),
@@ -209,7 +215,7 @@ async function main() {
   const other = await call("POST", `/companies/${c2.json.id}/issues`, {
     title: "E2E other company",
   });
-  await call("PATCH", `/issues/${other.json.id}`, { status: "blocked" });
+  await call("PATCH", `/issues/${other.json.id}`, BLOCKED);
   await sleep(5000);
   const otherTitle = `${other.json.identifier} is blocked`;
   check(
