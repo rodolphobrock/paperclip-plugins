@@ -1,16 +1,37 @@
-import { SEVERITIES } from "@paperclip-plugins/notify-core";
+import { createNotifier, validateConfig } from "@paperclip-plugins/notify-core";
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import { parseAppriseConfig } from "./config.js";
+import { appriseSender } from "./sender.js";
+
+/** Exported for tests, which wait on `notifier.idle()` after emitting events. */
+export const notifier = createNotifier({ sender: appriseSender, parseConfig: parseAppriseConfig });
 
 const plugin = definePlugin({
+  // Config, queues and status are all keyed by company; one worker serves every company.
+  multiCompanyConfig: true,
+
   async setup(ctx) {
-    ctx.logger.info("apprise notifier loaded (scaffold, no events handled yet)");
+    await notifier.setup(ctx);
   },
 
   async onHealth() {
-    return {
-      status: "ok",
-      message: `apprise notifier scaffold; severities: ${SEVERITIES.join(", ")}`,
-    };
+    return notifier.health();
+  },
+
+  // Queues live in plugin state; only in-flight deliveries need to finish.
+  async onShutdown() {
+    await notifier.idle();
+  },
+
+  // Config is read per event, so a saved change needs no worker restart.
+  async onConfigChanged(_config, context) {
+    notifier.configChanged(context?.companyId ?? null);
+  },
+
+  // The host's "Test configuration" passes no company, so this only checks structure;
+  // the settings page's "Send test notification" action resolves secrets.
+  async onValidateConfig(config) {
+    return validateConfig(parseAppriseConfig, config);
   },
 });
 

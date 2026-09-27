@@ -24,7 +24,8 @@
   ],
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
-    "worker": "./dist/worker.js"
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
   },
   "publishConfig": {
     "access": "public"
@@ -37,7 +38,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "peerDependencies": {
-    "@paperclipai/plugin-sdk": ">=2026.916.1"
+    "@paperclipai/plugin-sdk": ">=2026.916.1",
+    "react": ">=18"
   },
   "devDependencies": {
     "@paperclip-plugins/notify-core": "workspace:*",
@@ -47,5 +49,10 @@
     "ajv-formats": "^3.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }
