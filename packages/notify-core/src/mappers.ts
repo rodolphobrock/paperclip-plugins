@@ -265,12 +265,11 @@ function issueUpdated(payload: Record<string, unknown>, facts: EventFacts): Draf
 function issueCreated(payload: Record<string, unknown>, facts: EventFacts): DraftInput {
   const identifier = issueIdentifier(payload, facts);
   const title = readString(payload, "title") ?? facts.issue?.title;
+  const head = identifier !== undefined ? `New issue ${identifier}` : "New issue";
   return {
     rule: "issue.created",
     tone: "info",
-    title: `New issue ${identifier ?? ""}${title ? `: ${title}` : ""}`
-      .replace("issue :", "issue:")
-      .trim(),
+    title: title ? `${head}: ${title}` : head,
     tags: ["issue"],
     link: issueLink(identifier),
     factKey: "created",
