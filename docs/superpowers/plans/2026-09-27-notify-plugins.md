@@ -412,7 +412,7 @@ Erros do Apprise nunca incluem o corpo da resposta (pode ecoar URLs com credenci
 
 ### Fase 6 — Integração e ponta a ponta
 
-`examples/notify/docker-compose.yml` (ntfy + apprise-api); teste de integração opcional (`pnpm test:integration`, fora do CI padrão) que envia para os containers; roteiro manual dos 12 critérios de aceite numa instância local (`paperclipai plugin install <caminho>`), incluindo ntfy atrás do Cloudflare Access.
+`examples/notify/docker-compose.yml` (ntfy + apprise-api, versões fixas); testes de integração (`pnpm test:integration`) que enviam para os containers, rodando em todo PR no workflow `Integration` (a máquina de desenvolvimento não tem Docker); ponta a ponta automatizado num host Paperclip real no workflow `E2E` (`scripts/e2e/run.mjs`, commit fixado do Paperclip); roteiro manual dos 12 critérios de aceite numa instância local (`paperclipai plugin install <caminho>`), incluindo ntfy atrás do Cloudflare Access.
 
 ### Fase 7 — Documentação e release
 

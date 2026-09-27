@@ -4,7 +4,7 @@
 # apprise-api: http://localhost:8000
 services:
   ntfy:
-    image: binwiederhier/ntfy:latest
+    image: binwiederhier/ntfy:v2.28.0
     command: serve
     environment:
       NTFY_BASE_URL: http://localhost:8080
@@ -17,7 +17,7 @@ services:
       retries: 20
 
   apprise:
-    image: caronc/apprise:latest
+    image: caronc/apprise:2.0.0
     environment:
       # Both modes on: stateful (/add, /notify/{key}) and stateless (/notify with urls).
       APPRISE_STATEFUL_MODE: simple

@@ -55,10 +55,11 @@ describe("host schema compilation", () => {
     addFormats(ajv);
     ajv.addFormat("secret-ref", { validate: () => true });
     ajv.compile(appriseConfigSchema);
-    // Host limitation: format on a non-string field (secret refs are objects). See fields.ts.
-    const unexpected = warnings.filter(
-      (w) => !String(w).includes('missing type "number,string" for keyword "format"'),
-    );
-    expect(unexpected).toEqual([]);
+    // Host limitation: one "missing type" warning per secret-ref field (configKey, destinations.*.url, auth.password, extraHeaders.*.value),
+    // because saved secrets are objects. See notify-core fields.ts.
+    const formatWarning = (w: unknown) =>
+      String(w).includes('missing type "number,string" for keyword "format"');
+    expect(warnings.every(formatWarning)).toBe(true);
+    expect(warnings).toHaveLength(4);
   });
 });

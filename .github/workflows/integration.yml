@@ -18,29 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
+      # --wait covers both: ntfy's healthcheck is in the compose file, apprise's in its image.
       - name: Start ntfy and apprise-api
         run: docker compose -f examples/notify/docker-compose.yml up -d --wait --wait-timeout 120
 
-      - name: Wait for apprise-api
-        run: |
-          for i in $(seq 1 60); do
-            curl -fsS http://localhost:8000/status >/dev/null 2>&1 && exit 0
-            sleep 2
-          done
-          docker compose -f examples/notify/docker-compose.yml logs apprise
-          exit 1
-
+      # The tests throw instead of skipping when CI is set and these are missing.
       - run: pnpm test:integration
         env:
           NTFY_URL: http://localhost:8080

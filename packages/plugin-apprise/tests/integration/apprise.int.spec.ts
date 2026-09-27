@@ -10,6 +10,10 @@ import { appriseSender } from "../../src/sender.js";
 const APPRISE_URL = process.env.APPRISE_URL;
 const NTFY_URL = process.env.NTFY_URL;
 const NTFY_INTERNAL = process.env.NTFY_INTERNAL ?? "ntfy";
+// In CI a missing URL is a misconfigured workflow, not a reason to skip.
+if (process.env.CI && (!APPRISE_URL || !NTFY_URL)) {
+  throw new Error("APPRISE_URL and NTFY_URL are required when CI is set");
+}
 
 const secret = (id: string): SecretRef => ({ type: "secret_ref", secretId: id });
 

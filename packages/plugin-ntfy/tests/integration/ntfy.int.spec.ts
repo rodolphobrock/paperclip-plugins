@@ -5,6 +5,8 @@ import { ntfySender } from "../../src/sender.js";
 
 /** Real ntfy server, e.g. from examples/notify/docker-compose.yml. */
 const NTFY_URL = process.env.NTFY_URL;
+// In CI a missing URL is a misconfigured workflow, not a reason to skip.
+if (process.env.CI && !NTFY_URL) throw new Error("NTFY_URL is required when CI is set");
 
 const deps: SenderDeps = {
   fetch: (url, init) => fetch(url, init),

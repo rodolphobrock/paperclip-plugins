@@ -54,10 +54,11 @@ describe("host schema compilation", () => {
     addFormats(ajv);
     ajv.addFormat("secret-ref", { validate: () => true });
     ajv.compile(manifest.instanceConfigSchema ?? {});
-    // Host limitation: format on a non-string field (secret refs are objects). See fields.ts.
-    const unexpected = warnings.filter(
-      (w) => !String(w).includes('missing type "number,string" for keyword "format"'),
-    );
-    expect(unexpected).toEqual([]);
+    // Host limitation: one "missing type" warning per secret-ref field (auth.token, auth.password, extraHeaders.*.value),
+    // because saved secrets are objects. See notify-core fields.ts.
+    const formatWarning = (w: unknown) =>
+      String(w).includes('missing type "number,string" for keyword "format"');
+    expect(warnings.every(formatWarning)).toBe(true);
+    expect(warnings).toHaveLength(3);
   });
 });
