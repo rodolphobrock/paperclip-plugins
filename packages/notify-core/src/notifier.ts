@@ -24,7 +24,10 @@ import {
 } from "./types.js";
 
 const PRIVATE_FETCH_TIMEOUT_MS = 10_000;
-const SECRET_TTL_MS = 5 * 60_000;
+/** Short enough that a rotated secret is picked up quickly, long enough to stay far below
+ * the host's 30 secret reads per minute per company. */
+const SECRET_TTL_MS = 60_000;
+const TEST_INTERVAL_MS = 10_000;
 const HEALTH_FAILURE_WINDOW_MS = 5 * 60_000;
 const HEALTH_RETRY_BACKLOG = 100;
 export const DRAIN_JOB_KEY = "delivery-drain";
@@ -56,6 +59,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
   const locks = new Map<string, Promise<void>>();
   const warned = new Set<string>();
   const secrets = new Map<string, { value: string; at: number }>();
+  const lastTestAt = new Map<string, number>();
   const bucket = new TokenBucket();
   const retryBacklog = new Map<string, number>();
   let lastOutcome: { ok: boolean; at: number } | undefined;
@@ -78,7 +82,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
     },
 
     async health() {
-      const backlog = Math.max(0, ...retryBacklog.values());
+      const backlog = [...retryBacklog.values()].reduce((total, size) => total + size, 0);
       if (backlog > HEALTH_RETRY_BACKLOG) {
         return { status: "degraded", message: `${backlog} notifications waiting to be retried` };
       }
@@ -164,8 +168,12 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         logger: ctx.logger,
       });
 
-      const recordStatus = async (companyId: string, error: string | undefined) => {
-        lastOutcome = { ok: error === undefined, at: clock() };
+      const recordStatus = async (
+        companyId: string,
+        error: string | undefined,
+        { affectsHealth = true } = {},
+      ) => {
+        if (affectsHealth) lastOutcome = { ok: error === undefined, at: clock() };
         const store = new StatusStore(stateOf(ctx, companyId, "status"));
         const at = new Date(clock());
         try {
@@ -231,8 +239,8 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
               ctx.logger.warn("notify.activity_log_failed", { error: errorText(failure) }),
             );
         },
-        digested(companyId, count) {
-          metric("notify.digested", { companyId }, count);
+        digested(summary, count) {
+          metric("notify.digested", { eventType: "digest", severity: summary.severity }, count);
         },
       };
 
@@ -289,13 +297,12 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         const dedupe = new DedupeStore(stateOf(ctx, companyId, "dedupe"));
         const keys = [`eventId:${event.eventId}`, key];
         const now = clock();
-        if (await dedupe.seen(keys, now)) {
+        // Remembered before delivering: failures are retried from the queue, never re-derived.
+        if (await dedupe.checkAndRemember(keys, now)) {
           ctx.logger.debug("notify.suppressed", { eventType: event.eventType, reason: "dedupe" });
           metric("notify.deduped", tags);
           return;
         }
-        // Remember before delivering: failures are retried from the queue, never re-derived.
-        await dedupe.remember(keys, now);
 
         const notification: Notification = {
           key,
@@ -354,15 +361,30 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
       ctx.actions.register("send-test", async (params, context): Promise<TestResult> => {
         const companyId = context.companyId ?? companyOf(params);
         if (companyId === undefined) return { ok: false, error: "Missing company" };
+        // Works even with notifications disabled (to check a config before enabling it), but
+        // at most once per TEST_INTERVAL_MS per company.
+        const lastTest = lastTestAt.get(companyId);
+        if (lastTest !== undefined && clock() - lastTest < TEST_INTERVAL_MS) {
+          return { ok: false, error: "Wait a few seconds between test notifications" };
+        }
         const read = await readConfig(companyId);
         if (read.state === "missing")
           return { ok: false, error: "Not configured for this company" };
         if (read.state === "invalid") return { ok: false, error: read.error };
 
+        // Only attempts that reach the sender count against the throttle.
+        const now = clock();
+        for (const [id, at] of lastTestAt) {
+          if (now - at >= TEST_INTERVAL_MS) lastTestAt.delete(id);
+        }
+        lastTestAt.set(companyId, now);
+
         const result = await opts.sender
           .sendTest(read.config, depsFor(read.config, companyId))
           .catch(classifyError);
-        await recordStatus(companyId, result.ok ? undefined : result.error);
+        await recordStatus(companyId, result.ok ? undefined : result.error, {
+          affectsHealth: false,
+        });
         ctx.logger.info("notify.test", { companyId, ok: result.ok });
         return result.ok ? { ok: true } : { ok: false, error: redact(result.error) };
       });

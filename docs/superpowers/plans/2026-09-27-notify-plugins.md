@@ -364,6 +364,9 @@ Silêncio, limite, resumo agrupado (digest), retry, job `delivery-drain`, observ
   - digest: envia quando há itens, não está no silêncio e `now − since ≥ digestWindowMinutes` (ou o silêncio acabou); falha retentável mantém os itens para o próximo drain; permanente descarta com `notify.dropped`.
   - empresa sem pendências sai do índice.
 - Filas cheias descartam o item mais antigo com `notify.dropped`.
+- Só o excedente do limite vai para o digest: com ficha disponível, o item sai na hora, mesmo com digest pendente (pode chegar antes do resumo de itens anteriores).
+- Durante o silêncio, os retries não urgentes vão para o digest (o silêncio dura mais que a janela de retry).
+- Cada drain envia no máximo 20 itens por empresa, com 1 envio reservado para um digest pendente; a fila de retry é gravada a cada item.
 - `health()`: `degraded` se a última entrega falhou há menos de 5 min ou se alguma fila de retry passa de 100 itens; senão `ok`.
 - `onShutdown`: espera `idle()` (as filas já estão em `ctx.state`).
 
@@ -382,7 +385,30 @@ Cobertura do core ≥ 90%. Verificação: `pnpm lint && pnpm typecheck && pnpm t
 
 ### Fase 5 — Plugin Apprise (com e sem estado)
 
-Mesmo formato da fase 3. `config.ts`: `mode` (`stateful` padrão | `stateless`), `apiUrl`, `configKey` secret-ref (obrigatório com estado), `tagsBySeverity` (só com estado), `destinations: [{ url: secret-ref, minSeverity }]` (obrigatório sem estado, ao menos um), `format`, `auth`, `extraHeaders`. `sender.ts`: com estado, `POST {apiUrl}/notify/{configKey}` com `{ title, body, type, tag, format }`; sem estado, `POST {apiUrl}/notify` com `{ urls, title, body, type, format }`, filtrando destinos por `minSeverity` e acrescentando `priority`, `tags` e `click` às URLs `ntfy://`/`ntfys://`; link no fim do corpo para os demais. URLs resolvidas nunca aparecem em logs, erros ou status (só o esquema, como `tgram://…`). Manifest e página `routePath: "apprise"`. Testes de contrato dos dois modos e de harness; cobertura ≥ 80%.
+Referências: [apprise-api README](https://github.com/caronc/apprise-api/blob/master/README.md) (rotas, códigos de resposta, autenticação) e [Apprise ntfy](https://appriseit.com/services/ntfy/) (parâmetros da URL).
+
+#### Fatos da API que mudam o desenho
+
+| Ponto | apprise-api | Consequência |
+| --- | --- | --- |
+| Com estado | `POST /notify/{KEY}` com `{ body, title, type, tag, format }`; `{KEY}` tem 1–128 caracteres | Chave resolvida do secret e validada antes do envio; erro sem o valor |
+| Sem estado | `POST /notify/` com `{ urls, body, title, type, format }`; `urls` em lista | Uma requisição por grupo de corpo (ver abaixo) |
+| `204 No Content` | Configuração vazia ou nenhuma URL válida | Falha permanente ("no valid destinations") |
+| `424 Failed Dependency` | Pelo menos um destino falhou **ou** nenhuma tag casou | Falha permanente: repetir duplicaria nos destinos que já receberam |
+| `429` | Rate limit do nginx com `Retry-After: 60` | Retentável, respeitando `Retry-After` |
+| Autenticação | Basic Auth; usuário de configuração no modo sem estado precisa do header `X-Apprise-Config-ID` | `auth: basic` + `extraHeaders` cobrem os dois casos |
+| ntfy no Apprise | `priority` = `min`/`low`/`default`/`high`/`max`; `tags` (alias de `xtags`); `click` | Acrescentados à URL `ntfy://`/`ntfys://` quando ainda não existem nela (`xtags` conta como `tags`) |
+| Tags | `TAG_VALIDATION_RE` / `TAG_TOKEN_RE`: tokens começam com letra ou dígito, sem `.` | A config aceita só tokens `[A-Za-z0-9][A-Za-z0-9_-]*` separados por vírgula ou espaço, em minúsculas |
+| Dois lotes no modo sem estado | Destinos ntfy e demais vão em requisições separadas (corpos diferentes) | Todos os lotes são enviados; se algum foi entregue, a falha dos outros é permanente ("partially delivered"), para o retry do core não duplicar; sem nenhuma entrega, prevalece a falha retentável |
+
+Erros do Apprise nunca incluem o corpo da resposta (pode ecoar URLs com credenciais); só status e uma descrição fixa.
+
+#### Tarefas
+
+- [ ] **5.1 Partes comuns no core** — mover do ntfy para `notify-core`: `parseHttpUrl`, `URL_PATTERN`, `secretRefSchema`, `parseExtraHeaders` + `extraHeadersSchema` + `resolveExtraHeaders`, `basicAuthHeader`; página de configurações genérica `createSettingsPage(name)` em `@paperclip-plugins/notify-core/ui`. O ntfy passa a usar tudo isso sem mudar comportamento (testes do ntfy continuam verdes).
+- [ ] **5.2 Config Apprise** — `AppriseConfig`: `apiUrl` (obrigatório), `mode` (`stateful` padrão), `configKey` (secret, obrigatório com estado), `tagsBySeverity` (padrão `info`/`info`/`alert`/`urgent,alert`), `destinations` (`[{ url: secret, minSeverity }]`, ao menos um sem estado), `format` (`text`/`markdown`), `auth` (`none`/`basic`), `extraHeaders`. Schema aceito pela validação do host (Ajv) inclusive com campos limpos.
+- [ ] **5.3 Sender Apprise** — contrato dos dois modos; tag por severidade; `type` = tom; link no fim do corpo; destinos filtrados por `minSeverity`; grupo ntfy com `priority`/`tags`/`click` na URL e corpo sem link, demais destinos com link no corpo; nenhum destino elegível → ok sem requisição; 204/424/401/429/5xx; chave inválida; falha de secret; nenhuma URL ou chave aparece em erro; `sendTest` ignora `minSeverity`.
+- [ ] **5.4 Manifest, worker e página** — igual ao ntfy (`routePath: "apprise"`, job `delivery-drain`, `multiCompanyConfig`), testes de harness e de validação do host; cobertura ≥ 80%.
 
 ### Fase 6 — Integração e ponta a ponta
 
@@ -390,7 +416,7 @@ Mesmo formato da fase 3. `config.ts`: `mode` (`stateful` padrão | `stateless`),
 
 ### Fase 7 — Documentação e release
 
-READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, configurar trusted publishing no npm para cada pacote, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
+READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, publicar a primeira versão de cada plugin com um token granular temporário (o npm só aceita trusted publisher em pacote que já existe), configurar o trusted publisher (repositório `rodolphobrock/paperclip-plugins`, workflow `release.yml`) e revogar o token, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
 
 ## Desvios da spec
 
