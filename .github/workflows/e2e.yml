@@ -11,8 +11,8 @@ on:
   workflow_dispatch:
     inputs:
       paperclip_ref:
-        description: Paperclip commit, tag or branch to test against
-        default: 0f14d26
+        description: Paperclip full commit SHA, tag or branch to test against
+        default: 0f14d261233c545aa6a8a38ec253c498a5130fff
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  PAPERCLIP_REF: ${{ inputs.paperclip_ref || '0f14d26' }}
+  PAPERCLIP_REF: ${{ inputs.paperclip_ref || '0f14d261233c545aa6a8a38ec253c498a5130fff' }}
 
 jobs:
   e2e:
