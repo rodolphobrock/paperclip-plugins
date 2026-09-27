@@ -1,0 +1,78 @@
+name: E2E
+
+# Both plugins installed into a real Paperclip host (pinned commit), with scripts/e2e/mock.mjs
+# standing in for ntfy and apprise-api. See scripts/e2e/run.mjs for the acceptance checks.
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+      - "scripts/e2e/**"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+    inputs:
+      paperclip_ref:
+        description: Paperclip commit, tag or branch to test against
+        default: 0f14d26
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PAPERCLIP_REF: ${{ inputs.paperclip_ref || '0f14d26' }}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/checkout@v5
+        with:
+          repository: paperclipai/paperclip
+          ref: ${{ env.PAPERCLIP_REF }}
+          path: paperclip
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Build the plugins
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install Paperclip
+        working-directory: paperclip
+        run: pnpm install --frozen-lockfile
+
+      - name: Start the mock and Paperclip
+        run: |
+          node scripts/e2e/mock.mjs > "$RUNNER_TEMP/mock.log" 2>&1 &
+          (cd paperclip && PAPERCLIP_HOME="$RUNNER_TEMP/paperclip-home" pnpm dev:once > "$RUNNER_TEMP/server.log" 2>&1 &)
+          for i in $(seq 1 180); do
+            curl -fsS http://localhost:3100/api/health >/dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          tail -n 200 "$RUNNER_TEMP/server.log"
+          exit 1
+
+      - name: Acceptance checks
+        run: node scripts/e2e/run.mjs
+        env:
+          PC_API: http://localhost:3100/api
+          MOCK_URL: http://127.0.0.1:18080
+
+      - name: Logs
+        if: failure()
+        run: |
+          echo "--- server.log"; tail -n 300 "$RUNNER_TEMP/server.log" || true
+          echo "--- mock.log"; cat "$RUNNER_TEMP/mock.log" || true
+          echo "--- mock requests"; curl -fsS http://127.0.0.1:18080/__requests || true
