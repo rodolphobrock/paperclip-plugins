@@ -1,0 +1,29 @@
+# ntfy and apprise-api for local tests of the notifier plugins.
+#   docker compose -f examples/notify/docker-compose.yml up -d
+# ntfy:        http://localhost:8080 (the apprise container reaches it as http://ntfy)
+# apprise-api: http://localhost:8000
+services:
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    command: serve
+    environment:
+      NTFY_BASE_URL: http://localhost:8080
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:80/v1/health | grep -q healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  apprise:
+    image: caronc/apprise:latest
+    environment:
+      # Both modes on: stateful (/add, /notify/{key}) and stateless (/notify with urls).
+      APPRISE_STATEFUL_MODE: simple
+      APPRISE_WORKER_COUNT: "1"
+    ports:
+      - "8000:8000"
+    depends_on:
+      ntfy:
+        condition: service_healthy

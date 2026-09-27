@@ -16,7 +16,8 @@
     "format": "biome check --write .",
     "changeset": "changeset",
     "version-packages": "changeset version && pnpm install --lockfile-only",
-    "release": "pnpm -r build && changeset publish"
+    "release": "pnpm -r build && changeset publish",
+    "test:integration": "pnpm -r --if-present test:integration"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

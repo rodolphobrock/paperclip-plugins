@@ -1,0 +1,51 @@
+name: Integration
+
+# The senders against real ntfy and apprise-api containers (examples/notify/docker-compose.yml).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start ntfy and apprise-api
+        run: docker compose -f examples/notify/docker-compose.yml up -d --wait --wait-timeout 120
+
+      - name: Wait for apprise-api
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/status >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker compose -f examples/notify/docker-compose.yml logs apprise
+          exit 1
+
+      - run: pnpm test:integration
+        env:
+          NTFY_URL: http://localhost:8080
+          APPRISE_URL: http://localhost:8000
+
+      - name: Container logs
+        if: failure()
+        run: docker compose -f examples/notify/docker-compose.yml logs
