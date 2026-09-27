@@ -55,7 +55,9 @@ export const DEFAULT_TAGS: Readonly<Record<Severity, string>> = {
 };
 
 /** Apprise tags: words separated by commas or spaces (comma = OR, space = AND). */
-const TAGS_PATTERN = /^[A-Za-z0-9_.-]+(?:[ ,]+[A-Za-z0-9_.-]+)*$/;
+// Stricter than apprise-api's TAG_VALIDATION_RE / TAG_TOKEN_RE (tokens start with a letter or digit;
+// no "."), so a tag accepted here is never answered with 400.
+const TAGS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*(?:[ ,]+[A-Za-z0-9][A-Za-z0-9_-]*)*$/;
 
 /** Shared fields (notify-core) plus the Apprise fields, all problems reported at once. */
 export function parseAppriseConfig(raw: unknown): AppriseConfig {
@@ -117,7 +119,7 @@ function parseTags(value: unknown, issues: string[]): Record<Severity, string> {
     } else if (tag === undefined || tag === "") {
       // Cleared in the form: keep the default.
     } else if (typeof tag === "string" && TAGS_PATTERN.test(tag.trim())) {
-      tags[severity] = tag.trim();
+      tags[severity] = tag.trim().toLowerCase();
     } else {
       issues.push(`tagsBySeverity.${severity} must be Apprise tags separated by commas or spaces`);
     }

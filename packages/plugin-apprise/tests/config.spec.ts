@@ -120,3 +120,31 @@ describe("appriseConfigSchema", () => {
     expect(Object.keys(props)).toEqual(expect.arrayContaining(["quietHours", "events", "mode"]));
   });
 });
+
+describe("tag grammar (apprise-api TAG_VALIDATION_RE / TAG_TOKEN_RE)", () => {
+  it.each(["team.ops", "_ops", "-ops", "a/b", "ops!"])(
+    "rejects %j, which apprise-api answers with 400",
+    (tag) => {
+      const issues = issuesOf({
+        apiUrl: "https://a",
+        configKey: secret("k"),
+        tagsBySeverity: { high: tag },
+      });
+      expect(issues.join("\n")).toMatch(/tagsBySeverity\.high/);
+    },
+  );
+
+  it.each([
+    ["Ops", "ops"],
+    ["ops,pager", "ops,pager"],
+    ["ops pager", "ops pager"],
+    ["team_ops-1", "team_ops-1"],
+  ])("accepts %j and normalizes to %j", (tag, expected) => {
+    const config = parseAppriseConfig({
+      apiUrl: "https://a",
+      configKey: secret("k"),
+      tagsBySeverity: { high: tag },
+    });
+    expect(config.tagsBySeverity.high).toBe(expected);
+  });
+});

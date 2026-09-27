@@ -209,14 +209,14 @@ describe("stateless mode", () => {
     expect(result).toEqual({
       ok: false,
       retryable: false,
-      error: "apprise-api: a destination failed or no tag matched (HTTP 424)",
+      error: "partially delivered: apprise-api: a destination failed or no tag matched (HTTP 424)",
     });
   });
 });
 
 describe("responses", () => {
   it.each([
-    [204, false, "apprise-api: no valid destinations (HTTP 204)"],
+    [204, false, "apprise-api: no saved configuration for this key (HTTP 204)"],
     [400, false, "apprise-api rejected the request (HTTP 400)"],
     [401, false, "apprise-api: authentication failed (HTTP 401)"],
     [403, false, "apprise-api: access denied (HTTP 403)"],
@@ -281,5 +281,66 @@ describe("sendTest", () => {
     const d = deps();
     await appriseSender.sendTest(stateful(), d);
     expect(call(d).body.tag).toBe("info");
+  });
+});
+
+describe("stateless partial outcomes", () => {
+  const both = () => stateless([{ url: secret("ntfy") }, { url: secret("tg") }]);
+
+  it("does not retry (and duplicate) when one batch was delivered", async () => {
+    const d = deps([new Response("", { status: 200 }), new Response("", { status: 503 })]);
+    const result = await appriseSender.send(notification, both(), d);
+    expect(result).toEqual({
+      ok: false,
+      retryable: false,
+      error: "partially delivered: apprise-api unavailable (HTTP 503)",
+    });
+  });
+
+  it("keeps the retryable failure when nothing was delivered", async () => {
+    const d = deps([new Response("", { status: 424 }), new Response("", { status: 503 })]);
+    expect(await appriseSender.send(notification, both(), d)).toMatchObject({
+      ok: false,
+      retryable: true,
+    });
+  });
+
+  it("still sends the second batch when the first throws", async () => {
+    const d = deps([new TypeError("fetch failed"), new Response("", { status: 200 })]);
+    const result = await appriseSender.send(notification, both(), d);
+    expect(d.fetch).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: false, retryable: false });
+    expect(result.ok || result.error).toMatch(/^partially delivered: network error/);
+  });
+});
+
+describe("ntfy URL parameters review fixes", () => {
+  it("treats xtags as tags already set", async () => {
+    const d = deps();
+    SECRETS.ntfyx = "ntfys://ntfy.example.com/alerts?xtags=mine";
+    await appriseSender.send(notification, stateless([{ url: secret("ntfyx") }]), d);
+    const url = (call(d).body.urls as string[])[0] ?? "";
+    expect(url).not.toMatch(/[?&]tags=/);
+    expect(url).toContain("xtags=mine");
+  });
+
+  it("explains a 204 in stateful mode as a missing configuration", async () => {
+    const d = deps([new Response(null, { status: 204 })]);
+    expect(await appriseSender.send(notification, stateful(), d)).toEqual({
+      ok: false,
+      retryable: false,
+      error: "apprise-api: no saved configuration for this key (HTTP 204)",
+    });
+  });
+});
+
+describe("stateless 204", () => {
+  it("means no valid destinations", async () => {
+    const d = deps([new Response(null, { status: 204 })]);
+    expect(await appriseSender.send(notification, stateless([{ url: secret("tg") }]), d)).toEqual({
+      ok: false,
+      retryable: false,
+      error: "apprise-api: no valid destinations (HTTP 204)",
+    });
   });
 });

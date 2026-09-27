@@ -58,11 +58,14 @@ const STATUS_ERRORS: Readonly<Record<number, string>> = {
   429: "apprise-api rate limited the request",
 };
 
-function classifyAppriseResponse(res: Response): SendResult {
+function classifyAppriseResponse(res: Response, mode: AppriseConfig["mode"]): SendResult {
   if (res.status === 200 || res.status === 201) return { ok: true };
   const retryable = res.status === 429 || res.status >= 500;
   const base =
-    STATUS_ERRORS[res.status] ?? (retryable ? "apprise-api unavailable" : "apprise-api error");
+    res.status === 204 && mode === "stateful"
+      ? "apprise-api: no saved configuration for this key"
+      : (STATUS_ERRORS[res.status] ??
+        (retryable ? "apprise-api unavailable" : "apprise-api error"));
   const error = `${base} (HTTP ${res.status})`;
   if (!retryable) return { ok: false, retryable: false, error };
   const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"), Date.now());
@@ -87,7 +90,9 @@ function withNtfyParams(url: string, n: Notification): string {
     ["tags", [NTFY_TAG_BY_TONE[n.tone], ...n.tags].join(",")],
   ];
   if (n.url !== undefined) params.push(["click", n.url]);
-  const present = (name: string) => new RegExp(`[?&]${name}=`, "i").test(url);
+  // `xtags` is Apprise's current name for `tags`; either one set by the operator wins.
+  const present = (name: string) =>
+    new RegExp(`[?&]${name === "tags" ? "x?tags" : name}=`, "i").test(url);
   const added = params
     .filter(([name]) => !present(name))
     .map(([name, value]) => `${name}=${encodeURIComponent(value)}`);
@@ -113,13 +118,14 @@ async function post(
   payload: object,
   headers: Record<string, string>,
   deps: SenderDeps,
+  mode: AppriseConfig["mode"],
 ) {
   const response = await deps.fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
   });
-  return classifyAppriseResponse(response);
+  return classifyAppriseResponse(response, mode);
 }
 
 async function sendStateful(n: Notification, config: AppriseConfig, deps: SenderDeps) {
@@ -141,7 +147,8 @@ async function sendStateful(n: Notification, config: AppriseConfig, deps: Sender
     tag: config.tagsBySeverity[n.severity],
     format: config.format,
   };
-  return post(`${config.apiUrl}/notify/${key}`, payload, await buildHeaders(config, deps), deps);
+  const headers = await buildHeaders(config, deps);
+  return post(`${config.apiUrl}/notify/${key}`, payload, headers, deps, "stateful");
 }
 
 async function sendStateless(
@@ -166,13 +173,34 @@ async function sendStateless(
     { urls: ntfyUrls, body: n.body || n.title }, // the link travels as click
     { urls: otherUrls, body: bodyWithLink(n) },
   ];
-  let firstFailure: SendResult | undefined;
+  const results: SendResult[] = [];
   for (const batch of batches) {
     if (batch.urls.length === 0) continue;
-    const result = await post(`${config.apiUrl}/notify/`, { ...common, ...batch }, headers, deps);
-    if (!result.ok && firstFailure === undefined) firstFailure = result;
+    results.push(
+      await post(
+        `${config.apiUrl}/notify/`,
+        { ...common, ...batch },
+        headers,
+        deps,
+        "stateless",
+      ).catch(classifyError),
+    );
   }
-  return firstFailure ?? { ok: true };
+  return combine(results);
+}
+
+/**
+ * One result for several batches. The core retries a whole notification, so once any batch
+ * was delivered a failure is reported as permanent: retrying would duplicate the delivered one.
+ */
+function combine(results: SendResult[]): SendResult {
+  const failures = results.filter((r): r is Extract<SendResult, { ok: false }> => !r.ok);
+  const [firstFailure] = failures;
+  if (firstFailure === undefined) return { ok: true };
+  if (failures.length < results.length) {
+    return { ok: false, retryable: false, error: `partially delivered: ${firstFailure.error}` };
+  }
+  return failures.find((r) => r.retryable) ?? firstFailure;
 }
 
 async function send(

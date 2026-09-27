@@ -394,7 +394,9 @@ Referências: [apprise-api README](https://github.com/caronc/apprise-api/blob/ma
 | `424 Failed Dependency` | Pelo menos um destino falhou **ou** nenhuma tag casou | Falha permanente: repetir duplicaria nos destinos que já receberam |
 | `429` | Rate limit do nginx com `Retry-After: 60` | Retentável, respeitando `Retry-After` |
 | Autenticação | Basic Auth; usuário de configuração no modo sem estado precisa do header `X-Apprise-Config-ID` | `auth: basic` + `extraHeaders` cobrem os dois casos |
-| ntfy no Apprise | `priority` = `min`/`low`/`default`/`high`/`max`; `tags` (alias de `xtags`); `click` | Acrescentados à URL `ntfy://`/`ntfys://` quando ainda não existem nela |
+| ntfy no Apprise | `priority` = `min`/`low`/`default`/`high`/`max`; `tags` (alias de `xtags`); `click` | Acrescentados à URL `ntfy://`/`ntfys://` quando ainda não existem nela (`xtags` conta como `tags`) |
+| Tags | `TAG_VALIDATION_RE` / `TAG_TOKEN_RE`: tokens começam com letra ou dígito, sem `.` | A config aceita só tokens `[A-Za-z0-9][A-Za-z0-9_-]*` separados por vírgula ou espaço, em minúsculas |
+| Dois lotes no modo sem estado | Destinos ntfy e demais vão em requisições separadas (corpos diferentes) | Todos os lotes são enviados; se algum foi entregue, a falha dos outros é permanente ("partially delivered"), para o retry do core não duplicar; sem nenhuma entrega, prevalece a falha retentável |
 
 Erros do Apprise nunca incluem o corpo da resposta (pode ecoar URLs com credenciais); só status e uma descrição fixa.
 
