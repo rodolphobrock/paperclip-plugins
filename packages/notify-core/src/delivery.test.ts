@@ -420,16 +420,45 @@ describe("backlog fixes", () => {
     expect(sent).toHaveLength(20);
     expect(await retryItems()).toHaveLength(5);
   });
+});
 
-  it("keeps order: new items join a pending digest", async () => {
-    config = parseBaseConfig({ rateLimit: { perMinute: 1, digestWindowMinutes: 1 } });
+describe("review of the backlog fixes", () => {
+  it("sends directly when a token is available, even with a digest pending (spec: only the excess is held)", async () => {
+    config = parseBaseConfig({ rateLimit: { perMinute: 1, digestWindowMinutes: 60 } });
     const delivery = setup();
     await delivery.deliver(n("a"), config);
     await delivery.deliver(n("b"), config);
     now += MIN;
     await delivery.deliver(n("c"), config);
-    expect(calls).toEqual(["sent a", "queued b rate_limit", "queued c backlog"]);
+    expect(calls).toEqual(["sent a", "queued b rate_limit", "sent c"]);
+  });
+
+  it("reserves one send of each drain for a due digest", async () => {
+    config = parseBaseConfig({ rateLimit: { perMinute: 600, digestWindowMinutes: 1 } });
+    const delivery = setup();
+    results = Array.from({ length: 25 }, () => ({ ok: false, retryable: true, error: "HTTP 503" }));
+    for (let i = 0; i < 25; i++) await delivery.deliver(n(`k${i}`), config);
+    await new CompanyQueues({ retry: retryState, digest: digestState }).writeDigest({
+      since: now,
+      items: [n("held")],
+    });
+    sent = [];
+    now += 2 * MIN;
+    results = Array.from({ length: 25 }, () => ({ ok: false, retryable: true, error: "HTTP 503" }));
     await delivery.drain();
-    expect(sent.at(-1)?.title).toBe("2 notifications since 12:00");
+    expect(sent).toHaveLength(20);
+    expect(sent.at(-1)?.title).toBe("1 notification since 12:00");
+  });
+
+  it("moves every non-urgent retry into the digest during quiet hours, due or not", async () => {
+    const delivery = setup();
+    results = [{ ok: false, retryable: true, error: "HTTP 503" }];
+    await delivery.deliver(n("a"), parseBaseConfig({}));
+    config = parseBaseConfig({ quietHours: { enabled: true, start: "12:00", end: "13:00" } });
+    calls = [];
+    now += 10_000; // not due yet (30 s backoff)
+    await delivery.drain();
+    expect(calls).toEqual(["queued a quiet"]);
+    expect(retryState.value).toBeNull();
   });
 });

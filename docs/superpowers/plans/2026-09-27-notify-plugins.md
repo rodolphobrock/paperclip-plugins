@@ -364,6 +364,9 @@ Silêncio, limite, resumo agrupado (digest), retry, job `delivery-drain`, observ
   - digest: envia quando há itens, não está no silêncio e `now − since ≥ digestWindowMinutes` (ou o silêncio acabou); falha retentável mantém os itens para o próximo drain; permanente descarta com `notify.dropped`.
   - empresa sem pendências sai do índice.
 - Filas cheias descartam o item mais antigo com `notify.dropped`.
+- Só o excedente do limite vai para o digest: com ficha disponível, o item sai na hora, mesmo com digest pendente (pode chegar antes do resumo de itens anteriores).
+- Durante o silêncio, os retries não urgentes vão para o digest (o silêncio dura mais que a janela de retry).
+- Cada drain envia no máximo 20 itens por empresa, com 1 envio reservado para um digest pendente; a fila de retry é gravada a cada item.
 - `health()`: `degraded` se a última entrega falhou há menos de 5 min ou se alguma fila de retry passa de 100 itens; senão `ok`.
 - `onShutdown`: espera `idle()` (as filas já estão em `ctx.state`).
 

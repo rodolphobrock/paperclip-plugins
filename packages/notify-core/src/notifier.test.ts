@@ -593,3 +593,14 @@ describe("backlog fixes (notifier)", () => {
     );
   });
 });
+
+describe("send-test throttle details", () => {
+  it("does not spend the throttle window on a company without config", async () => {
+    const { harness } = await setup({});
+    await harness.performAction("send-test", {}, { companyId: COMPANY });
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toEqual({
+      ok: false,
+      error: "Not configured for this company",
+    });
+  });
+});

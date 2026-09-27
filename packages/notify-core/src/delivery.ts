@@ -20,8 +20,7 @@ const FIRST_BACKOFF_MS = 30_000;
  */
 export const MAX_SENDS_PER_DRAIN = 20;
 
-/** `backlog`: a digest is already pending, so later items join it to keep their order. */
-export type HoldReason = "quiet" | "rate_limit" | "backlog";
+export type HoldReason = "quiet" | "rate_limit";
 export type DropReason = "exhausted" | "expired" | "permanent" | "disabled" | "queue_full";
 
 /** Side effects of delivery (logs, metrics, status, activity log), implemented by the notifier. */
@@ -84,8 +83,9 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
     const now = deps.clock();
     const passes = urgentPasses(n, config);
     if (isQuiet(new Date(now), config.quietHours) && !passes) return hold(n, "quiet", now);
+    // Only the excess over the rate limit is held (spec decision 6), so an item sent now can
+    // arrive before a digest of earlier ones.
     const queues = deps.queuesFor(n.companyId);
-    if (!passes && (await queues.readDigest()) !== null) return hold(n, "backlog", now);
     const hasToken = deps.bucket.take(n.companyId, config.rateLimit.perMinute, now);
     if (!hasToken && !passes) return hold(n, "rate_limit", now);
 
@@ -126,19 +126,20 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
 
     for (const item of [...items]) {
       const n = item.notification;
+      const passes = urgentPasses(n, config);
+      if (quiet && !passes) {
+        // Quiet hours outlast the retry window; the digest delivers it when they end. Its
+        // attempt count restarts there (the digest has its own expiry after a failure).
+        await update(item, null);
+        await hold(n, "quiet", now);
+        continue;
+      }
       if (now - item.firstAt >= config.retry.maxAgeMinutes * MINUTE_MS) {
         await update(item, null);
         await observer.dropped(n, "expired", item.lastError);
         continue;
       }
       if (item.nextAt > now) continue;
-      const passes = urgentPasses(n, config);
-      if (quiet && !passes) {
-        // Quiet hours outlast the retry window; the digest delivers it when they end.
-        await update(item, null);
-        await hold(n, "quiet", now);
-        continue;
-      }
       if (budget.sends <= 0) continue;
       if (!deps.bucket.take(companyId, config.rateLimit.perMinute, now) && !passes) continue;
       budget.sends -= 1;
@@ -224,8 +225,11 @@ export function createDelivery<C extends BaseConfig>(deps: DeliveryDeps<C>) {
       await queues.writeDigest(null);
     } else {
       const now = deps.clock();
-      const budget = { sends: MAX_SENDS_PER_DRAIN };
+      // One send is kept for a pending digest, so a large retry queue cannot starve it.
+      const digestPending = (await queues.readDigest()) !== null;
+      const budget = { sends: MAX_SENDS_PER_DRAIN - (digestPending ? 1 : 0) };
       await drainRetries(companyId, queues, config, now, budget);
+      budget.sends += digestPending ? 1 : 0;
       await drainDigest(companyId, queues, config, now, budget);
     }
     if (await queues.isEmpty()) await deps.pending.remove(companyId);

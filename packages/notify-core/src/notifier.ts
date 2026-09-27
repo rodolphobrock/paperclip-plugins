@@ -367,11 +367,17 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         if (lastTest !== undefined && clock() - lastTest < TEST_INTERVAL_MS) {
           return { ok: false, error: "Wait a few seconds between test notifications" };
         }
-        lastTestAt.set(companyId, clock());
         const read = await readConfig(companyId);
         if (read.state === "missing")
           return { ok: false, error: "Not configured for this company" };
         if (read.state === "invalid") return { ok: false, error: read.error };
+
+        // Only attempts that reach the sender count against the throttle.
+        const now = clock();
+        for (const [id, at] of lastTestAt) {
+          if (now - at >= TEST_INTERVAL_MS) lastTestAt.delete(id);
+        }
+        lastTestAt.set(companyId, now);
 
         const result = await opts.sender
           .sendTest(read.config, depsFor(read.config, companyId))

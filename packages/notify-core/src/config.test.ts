@@ -202,7 +202,13 @@ describe("delivery settings", () => {
 });
 
 describe("paperclipBaseUrl hygiene", () => {
-  it.each(["https://h/pc?x=1", "https://h/pc#top", "https://user:pw@h/pc"])("rejects %j", (url) => {
+  it.each([
+    "https://h/pc?x=1",
+    "https://h/pc#top",
+    "https://user:pw@h/pc",
+    "https://h/?",
+    "https://h/#",
+  ])("rejects %j", (url) => {
     expect(() => parseBaseConfig({ paperclipBaseUrl: url })).toThrow(/paperclipBaseUrl/);
   });
 });

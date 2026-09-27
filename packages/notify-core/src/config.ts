@@ -160,7 +160,8 @@ function parseBaseUrl(value: unknown, issues: string[]): string | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value === "string" && URL.canParse(value)) {
     const url = new URL(value);
-    const plain = !url.search && !url.hash && !url.username && !url.password;
+    // Checked on the text too: "https://h/?" and "https://h/#" have an empty search/hash.
+    const plain = !value.includes("?") && !value.includes("#") && !url.username && !url.password;
     if ((url.protocol === "http:" || url.protocol === "https:") && plain) {
       return value.replace(/\/+$/, "");
     }
