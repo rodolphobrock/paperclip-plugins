@@ -24,6 +24,14 @@ services:
       APPRISE_WORKER_COUNT: "1"
     ports:
       - "8000:8000"
+    # The image's own healthcheck turns healthy before the app workers answer (nginx returns 502);
+    # /status only answers once they do.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/status >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
     depends_on:
       ntfy:
         condition: service_healthy
