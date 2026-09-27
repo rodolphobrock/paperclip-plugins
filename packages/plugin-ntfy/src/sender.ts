@@ -1,8 +1,10 @@
 import {
+  basicAuthHeader,
   classifyError,
   classifyResponse,
   type Notification,
   type NotificationSender,
+  resolveExtraHeaders,
   type SenderDeps,
   type SendResult,
   type Severity,
@@ -69,16 +71,14 @@ async function publish(n: Notification, config: NtfyConfig, deps: SenderDeps): P
 async function buildHeaders(config: NtfyConfig, deps: SenderDeps): Promise<Record<string, string>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
 
-  for (const [index, header] of config.extraHeaders.entries()) {
-    headers[header.name] = await deps.resolveSecret(header.value, `extraHeaders.${index}.value`);
-  }
+  Object.assign(headers, await resolveExtraHeaders(config.extraHeaders, deps));
 
   const { auth } = config;
   if (auth.mode === "token") {
     headers.Authorization = `Bearer ${await deps.resolveSecret(auth.token, "auth.token")}`;
   } else if (auth.mode === "basic") {
     const password = await deps.resolveSecret(auth.password, "auth.password");
-    headers.Authorization = `Basic ${Buffer.from(`${auth.username}:${password}`).toString("base64")}`;
+    headers.Authorization = basicAuthHeader(auth.username, password);
   }
   return headers;
 }

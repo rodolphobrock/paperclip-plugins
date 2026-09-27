@@ -1,25 +1,26 @@
-import type { StatusSnapshot } from "@paperclip-plugins/notify-core";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import manifest from "../src/manifest.js";
+import type { StatusSnapshot } from "../status.js";
 
 const hooks = vi.hoisted(() => ({
   status: null as StatusSnapshot | null,
   loading: false,
+  error: null as { message: string } | null,
 }));
 
 vi.mock("@paperclipai/plugin-sdk/ui", () => ({
   usePluginData: () => ({
     data: hooks.status,
     loading: hooks.loading,
-    error: null,
+    error: hooks.error,
     refresh: () => {},
   }),
   usePluginAction: () => async () => ({ ok: true }),
   usePluginToast: () => () => null,
 }));
 
-const { NtfySettingsPage } = await import("../src/ui/index.js");
+const { createSettingsPage } = await import("./settings-page.js");
+const Page = createSettingsPage("ntfy");
 
 const context = {
   companyId: "co-1",
@@ -31,34 +32,19 @@ const context = {
 };
 
 function render(): string {
-  return renderToStaticMarkup(<NtfySettingsPage context={context} />);
+  return renderToStaticMarkup(<Page context={context} />);
 }
 
 beforeEach(() => {
   hooks.status = null;
   hooks.loading = false;
+  hooks.error = null;
 });
 
-describe("manifest UI slot", () => {
-  it("declares the company settings page and its capability", () => {
-    expect(manifest.entrypoints.ui).toBe("./dist/ui");
-    expect(manifest.capabilities).toContain("instance.settings.register");
-    expect(manifest.ui?.slots).toEqual([
-      {
-        type: "companySettingsPage",
-        id: "ntfy-settings",
-        displayName: "ntfy",
-        exportName: "NtfySettingsPage",
-        routePath: "ntfy",
-      },
-    ]);
-  });
-});
-
-describe("NtfySettingsPage", () => {
+describe("createSettingsPage", () => {
   it("shows loading", () => {
     hooks.loading = true;
-    expect(render()).toContain("Loading");
+    expect(render()).toContain("Loading ntfy status");
   });
 
   it("asks to configure an unconfigured company", () => {
@@ -85,5 +71,12 @@ describe("NtfySettingsPage", () => {
   it("shows config errors", () => {
     hooks.status = { configured: true, enabled: false, configError: "topic is required" };
     expect(render()).toContain("topic is required");
+  });
+
+  it("does not claim the company is unconfigured when status failed to load", () => {
+    hooks.error = { message: "network" };
+    const html = render();
+    expect(html).toContain("Could not load status");
+    expect(html).not.toContain("Not configured");
   });
 });

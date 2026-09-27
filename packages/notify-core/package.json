@@ -14,7 +14,8 @@
     "node": ">=24.11.0"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./ui": "./src/ui/settings-page.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -22,6 +23,10 @@
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "@paperclipai/plugin-sdk": "2026.916.1"
+    "@paperclipai/plugin-sdk": "2026.916.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   }
 }

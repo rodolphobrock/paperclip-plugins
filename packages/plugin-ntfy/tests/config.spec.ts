@@ -84,9 +84,9 @@ describe("parseNtfyConfig", () => {
     expect(text).toMatch(/topicsBySeverity\.urgent/);
     expect(text).toMatch(/topicsBySeverity\.critical/);
     expect(text).toMatch(/auth\.token/);
-    expect(text).toMatch(/extraHeaders\[0\]\.name/);
-    expect(text).toMatch(/extraHeaders\[1\]\.name/);
-    expect(text).toMatch(/extraHeaders\[1\]\.value/);
+    expect(text).toMatch(/extraHeaders\.0\.name/);
+    expect(text).toMatch(/extraHeaders\.1\.name/);
+    expect(text).toMatch(/extraHeaders\.1\.value/);
     expect(text).toMatch(/markdown/);
     expect(text).toMatch(/iconUrl/);
   });

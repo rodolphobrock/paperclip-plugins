@@ -14,6 +14,20 @@ export {
   parseBaseConfig,
 } from "./config.js";
 export { backoffMs, type DropReason, type HoldReason } from "./delivery.js";
+export {
+  type BasicAuth,
+  basicAuthHeader,
+  basicAuthSchema,
+  type ExtraHeader,
+  extraHeadersSchema,
+  parseBasicAuth,
+  parseExtraHeaders,
+  parseHttpUrl,
+  parseWithBase,
+  resolveExtraHeaders,
+  secretRefSchema,
+  URL_PATTERN,
+} from "./fields.js";
 export { isRecord, isSecretRef, readNumber, readString } from "./guards.js";
 export { classifyError, classifyResponse, parseRetryAfter } from "./http-result.js";
 export { buildDeepLink } from "./links.js";
