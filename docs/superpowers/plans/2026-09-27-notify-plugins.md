@@ -2,7 +2,7 @@
 
 > **Para agentes:** SUB-SKILL OBRIGATÓRIA: use superpowers:subagent-driven-development (recomendado) ou superpowers:executing-plans para executar este plano tarefa por tarefa. Os passos usam checkbox (`- [ ]`).
 
-**Objetivo:** entregar `@rodolphobrock/paperclip-notify-core`, `paperclip-plugin-ntfy` e `paperclip-plugin-apprise` num pnpm workspace, publicados no npm com provenance.
+**Objetivo:** entregar `paperclip-plugin-ntfy` e `paperclip-plugin-apprise`, publicados no npm com provenance, e a biblioteca interna `@paperclip-plugins/notify-core` (privada, embutida nos plugins), num pnpm workspace.
 
 **Arquitetura:** o core é uma biblioteca sem efeitos colaterais (portas e adaptadores) que cada plugin chama no `setup`; os plugins só implementam `NotificationSender<C>`, schema e manifest. O worker de cada plugin é empacotado com esbuild (presets do SDK), então o core entra no bundle.
 
@@ -15,14 +15,14 @@
 - Node `>=24.11.0` (`engines` na raiz e nos pacotes); CI em Node 24.
 - pnpm 9 (`packageManager: pnpm@9.15.9`); lockfile commitado.
 - TypeScript `strict`, sem `any`; payloads de evento são `unknown` e passam por guardas de tipo.
-- `@paperclipai/plugin-sdk` é `peerDependency` (`>=2026.916.1`) do core e dos plugins, e `devDependency` fixa em `2026.916.1`.
+- `@paperclipai/plugin-sdk`: nos plugins, `peerDependency` (`>=2026.916.1`) e `devDependency` fixa em `2026.916.1`; no core, só `devDependency` e `import type`.
 - Manifests com `apiVersion: 1`, ID igual ao nome do pacote e `version` lida do `package.json`; sem `minimumHostVersion` (ver "Desvios da spec").
-- Nomes: plugins em `packages/plugin-<nome>` → `paperclip-plugin-<nome>`; bibliotecas em `packages/<família>-core` → `@rodolphobrock/paperclip-<família>-core`.
+- Nomes: plugins em `packages/plugin-<nome>` → `paperclip-plugin-<nome>`; bibliotecas em `packages/<família>-core` → `@paperclip-plugins/<família>-core`, sempre `"private": true`, `devDependency` (`workspace:*`) dos plugins e embutidas no `worker.js` pelo esbuild.
 - Licença MIT em todos os pacotes.
 - Fim de linha LF em tudo (`.gitattributes` com `eol=lf`); desenvolvimento no Windows com `npm_config_script_shell` apontando para o Git Bash.
 - Nunca logar token, senha, `configKey` nem valor de header secreto.
 - Cobertura mínima: 90% no core, 80% nos plugins (linhas, funções, branches, statements).
-- Pacotes ficam com `"private": true` até a fase 7; o `release.yml` não publica nada antes disso.
+- Os plugins ficam com `"private": true` até a fase 7; o `release.yml` não publica nada antes disso.
 
 ## Pontos de atenção na revisão
 
@@ -88,19 +88,19 @@ Resultado: `pnpm install && pnpm lint && pnpm typecheck && pnpm test && pnpm bui
 - [ ] **Passo 7:** `pnpm install`, depois `pnpm lint`. Esperado: sem erros.
 - [ ] **Passo 8:** commit `chore: pnpm workspace, Biome, TypeScript base e LF`.
 
-### Tarefa 1.2: `@rodolphobrock/paperclip-notify-core` (scaffold)
+### Tarefa 1.2: `@paperclip-plugins/notify-core` (scaffold)
 
 **Arquivos:**
-- Criar: `packages/notify-core/{package.json,tsconfig.json,tsconfig.build.json,vitest.config.ts,README.md,CHANGELOG.md}`, `packages/notify-core/src/{index.ts,severity.ts}`, `packages/notify-core/src/severity.test.ts`
+- Criar: `packages/notify-core/{package.json,tsconfig.json,vitest.config.ts,README.md,CHANGELOG.md}`, `packages/notify-core/src/{index.ts,severity.ts}`, `packages/notify-core/src/severity.test.ts`
 
 **Interfaces:**
 - Produz: `SEVERITIES`, `type Severity`, `TONES`, `type Tone`, `compareSeverity(a: Severity, b: Severity): number`, `isSeverity(value: unknown): value is Severity`. Exportados de `src/index.ts`.
-- Exports do pacote: em desenvolvimento `"." → "./src/index.ts"` (o esbuild e o Vitest dos plugins leem a fonte); `publishConfig.exports` aponta para `dist/` (build com `tsc -p tsconfig.build.json`).
+- Exports do pacote: `"." → "./src/index.ts"` (o esbuild e o Vitest dos plugins leem a fonte). Sem build próprio: o pacote é privado e só existe embutido nos plugins.
 
 - [ ] **Passo 1:** escrever `severity.test.ts` cobrindo ordem (`low < normal < high < urgent`), `compareSeverity` e `isSeverity` com string válida, inválida, `null` e número.
-- [ ] **Passo 2:** `pnpm --filter @rodolphobrock/paperclip-notify-core test`. Esperado: falha, módulo inexistente.
+- [ ] **Passo 2:** `pnpm --filter @paperclip-plugins/notify-core test`. Esperado: falha, módulo inexistente.
 - [ ] **Passo 3:** implementar `severity.ts` e `index.ts`.
-- [ ] **Passo 4:** rodar testes, `typecheck`, `build`. Esperado: verde; `dist/index.js` e `dist/index.d.ts` gerados.
+- [ ] **Passo 4:** rodar testes e `typecheck`. Esperado: verde.
 - [ ] **Passo 5:** commit `feat(notify-core): scaffold com severidades e tons`.
 
 ### Tarefa 1.3: `paperclip-plugin-ntfy` e `paperclip-plugin-apprise` (scaffold)
@@ -164,9 +164,9 @@ Cobertura do core ≥ 90% ao fim da fase (`vitest.config.ts` com `thresholds`).
 
 Tarefas: `quiet-hours.ts` (`isQuiet(now, cfg)`, relógio injetado, cruzamento de meia-noite, fuso IANA validado), `rate-limit.ts` (token bucket por empresa), `digest.ts` (fila e mensagem "N eventos desde HH:MM", 10 linhas), `retry.ts` (backoff 30 s × 2ⁿ, `maxAttempts`, `maxAgeMinutes`, `notify.dropped` + `ctx.activity.log`), job `delivery-drain` (`*/1 * * * *`), `onShutdown` grava filas, `observability.ts` (logs e métricas da decisão 13), `onHealth` degradado. Cada módulo com relógio falso e harness `runJob("delivery-drain")`.
 
-### Fase 5 — Plugin Apprise
+### Fase 5 — Plugin Apprise (com e sem estado)
 
-Mesmo formato da fase 3: `config.ts` (`apiUrl`, `configKey` secret-ref, `tagsBySeverity`, `format`, `auth`, `extraHeaders`), `sender.ts` (`POST {apiUrl}/notify/{configKey}`, JSON `{ title, body, type, tag, format }`, link no fim do corpo), manifest, página `routePath: "apprise"`. Testes de contrato e de harness; cobertura ≥ 80%.
+Mesmo formato da fase 3. `config.ts`: `mode` (`stateful` padrão | `stateless`), `apiUrl`, `configKey` secret-ref (obrigatório com estado), `tagsBySeverity` (só com estado), `destinations: [{ url: secret-ref, minSeverity }]` (obrigatório sem estado, ao menos um), `format`, `auth`, `extraHeaders`. `sender.ts`: com estado, `POST {apiUrl}/notify/{configKey}` com `{ title, body, type, tag, format }`; sem estado, `POST {apiUrl}/notify` com `{ urls, title, body, type, format }`, filtrando destinos por `minSeverity` e acrescentando `priority`, `tags` e `click` às URLs `ntfy://`/`ntfys://`; link no fim do corpo para os demais. URLs resolvidas nunca aparecem em logs, erros ou status (só o esquema, como `tgram://…`). Manifest e página `routePath: "apprise"`. Testes de contrato dos dois modos e de harness; cobertura ≥ 80%.
 
 ### Fase 6 — Integração e ponta a ponta
 
@@ -174,11 +174,9 @@ Mesmo formato da fase 3: `config.ts` (`apiUrl`, `configKey` secret-ref, `tagsByS
 
 ### Fase 7 — Documentação e release
 
-READMEs dos três pacotes (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true`, configurar trusted publishing no npm para cada pacote, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
+READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, configurar trusted publishing no npm para cada pacote, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
 
 ## Desvios da spec
 
 - **Tags de release:** a spec pede `v<pacote>@<versão>`; o Changesets gera `<pacote>@<versão>` e não tem opção para mudar o formato. O plano usa o padrão do Changesets.
-- **Escopo npm:** a spec deixa em aberto; o plano usa `@rodolphobrock`.
-- **Core nos plugins:** o core entra como `devDependency` dos plugins, porque o esbuild o empacota no worker; ele não é carregado em tempo de execução.
 - **`minimumHostVersion`:** a spec (decisão 15) pede `"2026.916.1"`, mas o servidor do Paperclip passa `hostVersion` `"0.0.0"` ao carregador de plugins (`server/src/app.ts`, `opts.hostVersion ?? "0.0.0"`; `server/src/index.ts` não informa a versão), e o carregador recusa a instalação. Os manifests não declaram o campo; a compatibilidade fica no `peerDependency` do SDK. Vale citar no PR upstream da decisão 14.

@@ -38,21 +38,21 @@ importers:
 
   packages/plugin-apprise:
     devDependencies:
+      '@paperclip-plugins/notify-core':
+        specifier: workspace:*
+        version: link:../notify-core
       '@paperclipai/plugin-sdk':
         specifier: 2026.916.1
         version: 2026.916.1
-      '@rodolphobrock/paperclip-notify-core':
-        specifier: workspace:*
-        version: link:../notify-core
 
   packages/plugin-ntfy:
     devDependencies:
+      '@paperclip-plugins/notify-core':
+        specifier: workspace:*
+        version: link:../notify-core
       '@paperclipai/plugin-sdk':
         specifier: 2026.916.1
         version: 2026.916.1
-      '@rodolphobrock/paperclip-notify-core':
-        specifier: workspace:*
-        version: link:../notify-core
 
 packages:
 

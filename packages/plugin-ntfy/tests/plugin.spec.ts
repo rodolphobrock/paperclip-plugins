@@ -1,5 +1,5 @@
+import { SEVERITIES } from "@paperclip-plugins/notify-core";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
-import { SEVERITIES } from "@rodolphobrock/paperclip-notify-core";
 import { describe, expect, it } from "vitest";
 import pkg from "../package.json" with { type: "json" };
 import manifest from "../src/manifest.js";

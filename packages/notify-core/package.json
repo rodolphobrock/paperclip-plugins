@@ -1,8 +1,8 @@
 {
-  "name": "@rodolphobrock/paperclip-notify-core",
+  "name": "@paperclip-plugins/notify-core",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared notification pipeline for Paperclip notifier plugins.",
+  "description": "Internal notification pipeline bundled into the Paperclip notifier plugins. Not published.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -16,28 +16,10 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
-  "publishConfig": {
-    "access": "public",
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
-      }
-    },
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts"
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
-  },
-  "peerDependencies": {
-    "@paperclipai/plugin-sdk": ">=2026.916.1"
   },
   "devDependencies": {
     "@paperclipai/plugin-sdk": "2026.916.1"

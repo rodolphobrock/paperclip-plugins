@@ -1,5 +1,5 @@
+import { SEVERITIES } from "@paperclip-plugins/notify-core";
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
-import { SEVERITIES } from "@rodolphobrock/paperclip-notify-core";
 
 const plugin = definePlugin({
   async setup(ctx) {

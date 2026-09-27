@@ -10,7 +10,7 @@ Community plugins for [Paperclip](https://github.com/paperclipai/paperclip).
 | --- | --- | --- |
 | `paperclip-plugin-ntfy` | planned | Push notifications for Paperclip events via [ntfy](https://ntfy.sh). |
 | `paperclip-plugin-apprise` | planned | Notifications to 100+ services via [apprise-api](https://github.com/caronc/apprise-api). |
-| `@rodolphobrock/paperclip-notify-core` | planned | Shared notification pipeline used by the notifier plugins. |
+| `@paperclip-plugins/notify-core` | planned (internal) | Shared notification pipeline bundled into the notifier plugins; not published. |
 
 ## Development
 

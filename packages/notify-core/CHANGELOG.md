@@ -1,1 +1,1 @@
-# @rodolphobrock/paperclip-notify-core
+# @paperclip-plugins/notify-core

@@ -12,23 +12,33 @@ Tentativas anteriores no core (#303, #389 com ntfy, #393) e como plugin dentro d
 
 ## Objetivo
 
-Três pacotes neste repositório (`rodolphobrock/paperclip-plugins`), publicados no npm:
+Três pacotes neste repositório (`rodolphobrock/paperclip-plugins`); só os dois plugins são publicados no npm:
 
 | Pacote | Tipo | Papel |
 | --- | --- | --- |
-| `@<escopo>/paperclip-notify-core` | biblioteca | Pipeline comum: eventos → mensagem normalizada → filtros → dedupe → silêncio → limite/digest → envio → retry. Contrato `NotificationSender`. |
+| `@paperclip-plugins/notify-core` | biblioteca interna (`private`, não publicada) | Pipeline comum: eventos → mensagem normalizada → filtros → dedupe → silêncio → limite/digest → envio → retry. Contrato `NotificationSender`. |
 | `paperclip-plugin-ntfy` | plugin | Sender ntfy com prioridade, tags, link de clique, autenticação e headers extras. |
-| `paperclip-plugin-apprise` | plugin | Sender apprise-api (modo com estado), roteando por tag. |
+| `paperclip-plugin-apprise` | plugin | Sender apprise-api nos modos com estado (rota por tag) e sem estado (destinos por URL). |
 
 Fecha a #26 e cobre boa parte da #2897 e da #3257 sem tocar no core.
 
 ## Fora de escopo
 
 - Qualquer mudança no core do Paperclip dentro deste trabalho (o PR opcional do bug 13732 é trabalho separado, ver decisão 14).
-- Botões de ação na notificação que aprovam/rejeitam (`approvals.decide` existe, mas exige entrada autenticada via `webhooks.receive`; fica para uma v0.3 com desenho de segurança próprio).
-- Modo sem estado do apprise-api (`/notify` com `urls`); só entra se houver pedido.
+- Botões de ação na notificação que aprovam/rejeitam: planejados para a v0.3 (ver "Roadmap"), não entram nesta entrega.
 - Web Push no navegador (#597, #755).
 - Garantia de entrega: o barramento de eventos do host não persiste eventos (ver "Fatos").
+
+## Alternativas consideradas
+
+| Alternativa | Decisão | Motivo |
+| --- | --- | --- |
+| PR no core ou em `packages/plugins/` do Paperclip | descartada | Política do repositório (plugins de terceiros vão para o npm), nenhum notifier da comunidade mergeado até hoje, CI trava pacote novo (lockfile proibido em PR, Dockerfile, manifest de release). |
+| Só ntfy nativo | parcial | Recursos completos do ntfy (prioridade, tags, clique por evento), mas público estreito. |
+| Só Apprise | parcial | Mais de 100 destinos com um plugin, mas perde prioridade e link de clique por evento no modo com estado e exige o container do apprise-api. |
+| Um plugin híbrido (ntfy + Apprise como backends) | descartada | Configuração condicionada ao backend, permissões somadas, nome genérico ruim para descoberta. |
+| **Dois plugins + biblioteca comum** | **escolhida** | Responsabilidade única, configuração enxuta, nomes fáceis de achar, mesmo padrão dos notifiers da comunidade; a parte cara fica na biblioteca. A biblioteca é interna (fonte única no repositório, embutida no build de cada plugin), então só dois pacotes vão para o npm e não é preciso escopo. Publicá-la fica para quando alguém quiser escrever outro notifier com ela. |
+| Um repositório por plugin | descartada | CI, lint e release repetidos; atualização do SDK em vários lugares. Monorepo `paperclip-plugins` com regra para separar um plugin quando fizer sentido (decisão 1). |
 
 ## Fatos do fornecedor que moldam o desenho
 
@@ -59,7 +69,7 @@ Este repositório (`rodolphobrock/paperclip-plugins`, licença MIT, igual ao Pap
 ```
 paperclip-plugins/
 ├── packages/
-│   ├── notify-core/     # @<escopo>/paperclip-notify-core (biblioteca)
+│   ├── notify-core/     # @paperclip-plugins/notify-core (biblioteca interna, private)
 │   ├── plugin-ntfy/     # paperclip-plugin-ntfy
 │   └── plugin-apprise/  # paperclip-plugin-apprise
 ├── examples/
@@ -75,14 +85,14 @@ paperclip-plugins/
 Convenções do repositório:
 
 - Plugins: pasta `plugin-<nome>`, pacote npm `paperclip-plugin-<nome>` sem escopo (padrão do ecossistema), ID de manifest igual ao nome do pacote.
-- Bibliotecas compartilhadas: pasta `<família>-core`, pacote com escopo (`@<escopo>/paperclip-<família>-core`).
+- Bibliotecas compartilhadas: pasta `<família>-core`, pacote `@paperclip-plugins/<família>-core` com `"private": true`. O código fica num lugar só; cada plugin a declara como `devDependency` (`workspace:*`) e o esbuild a embute no `worker.js` (a preset do SDK usa `bundle: true`), então o pacote publicado do plugin não depende dela. Só vira pacote público se houver uso fora deste repositório.
 - Cada pacote tem versão, changelog e README próprios; o README da raiz é o índice.
 - CI roda só os pacotes afetados (`pnpm --filter "...[origin/main]"`); labels de issue por pacote (`pkg:ntfy`, `pkg:apprise`, `pkg:notify-core`).
 - Um plugin sai para repositório próprio se ganhar outro mantenedor, dependências pesadas ou for adotado pelos maintainers do Paperclip.
 
 ### 2. Biblioteca comum sem efeitos colaterais
 
-O core não é plugin: não chama `definePlugin`/`runWorker`, não registra nada ao ser importado. Exporta uma função que o plugin chama no `setup`. `@paperclipai/plugin-sdk` é `peerDependency` do core e dos plugins (o host fornece a versão).
+O core não é plugin: não chama `definePlugin`/`runWorker`, não registra nada ao ser importado. Exporta uma função que o plugin chama no `setup`. No core, `@paperclipai/plugin-sdk` entra só como tipos (`import type`) e `devDependency`; nos plugins, segue o padrão dos plugins da comunidade (`peerDependency`), com o build pela preset do SDK.
 
 Arquitetura portas e adaptadores:
 
@@ -189,7 +199,7 @@ O worker não recebe variáveis de ambiente (fato 1), então o fator III (config
 
 | Fator | Como fica |
 | --- | --- |
-| I. Base de código | Um repositório, três pacotes, publicados por versão. |
+| I. Base de código | Um repositório, três pacotes; os dois plugins publicados por versão, a biblioteca embutida neles. |
 | II. Dependências | Explícitas; SDK como `peerDependency`; lockfile commitado no repositório próprio. |
 | III. Configuração | Schema por empresa no host; segredos por `secret-ref`. |
 | IV. Serviços de apoio | ntfy e apprise-api tratados como recursos anexados por URL; trocar de servidor = trocar configuração. |
@@ -265,13 +275,22 @@ Campos próprios:
 
 ### 12. Plugin Apprise
 
-Envio: `POST {apiUrl}/notify/{configKey}` com JSON `{ title, body, type, tag, format }`. Os destinos (Telegram, e-mail, ntfy, Discord…) e suas credenciais ficam no apprise-api, não no Paperclip.
+Dois modos, escolhidos na configuração (`mode`):
+
+| | Com estado (`stateful`) | Sem estado (`stateless`) |
+| --- | --- | --- |
+| Envio | `POST {apiUrl}/notify/{configKey}` com `{ title, body, type, tag, format }` | `POST {apiUrl}/notify` com `{ urls, title, body, type, format }` |
+| Onde ficam os destinos e credenciais | No apprise-api (cadastrados uma vez no painel) | No Paperclip, como secrets (URLs do Apprise contêm tokens e senhas) |
+| Roteamento por severidade | Por tag cadastrada no apprise-api | Por destino: cada URL tem `minSeverity` |
+| Prioridade e link por evento | Não (fixos na URL cadastrada); link vai no corpo | Sim para `ntfy://`/`ntfys://` (o plugin acrescenta `priority`, `tags` e `click` à URL); demais serviços recebem o link no corpo |
+| Requisito do apprise-api | Configuração salva com a chave | `APPRISE_STATELESS_MODE` não desabilitado |
+
+Mapeamento comum aos dois modos:
 
 | Elemento | Mapeamento |
 | --- | --- |
 | `type` | tom: `info`, `success`, `warning`, `failure` |
-| `tag` | `tagsBySeverity[severidade]`, padrão `low`/`normal` → `info`, `high` → `alert`, `urgent` → `urgent,alert` |
-| link | anexado ao fim do corpo (o modo com estado não passa link por destino) |
+| `tag` (com estado) | `tagsBySeverity[severidade]`, padrão `low`/`normal` → `info`, `high` → `alert`, `urgent` → `urgent,alert` |
 | `format` | `text` ou `markdown` |
 
 Campos próprios:
@@ -279,11 +298,15 @@ Campos próprios:
 | Campo | Tipo | Padrão | Observação |
 | --- | --- | --- | --- |
 | `apiUrl` | URI | — | Obrigatório. |
-| `configKey` | secret-ref | — | A chave dá acesso à configuração, por isso é tratada como segredo. |
-| `tagsBySeverity` | objeto | tabela acima | |
+| `mode` | `stateful` \| `stateless` | `stateful` | Com estado é o padrão por manter credenciais fora do Paperclip. |
+| `configKey` | secret-ref | — | Obrigatório com estado. A chave dá acesso à configuração, por isso é segredo. |
+| `tagsBySeverity` | objeto | tabela acima | Só com estado. |
+| `destinations` | `[{ url: secret-ref, minSeverity }]` | vazio | Obrigatório sem estado; ao menos um destino. |
 | `format` | `text` \| `markdown` | `text` | |
 | `auth` | `none` \| `basic` (+ secret-ref) | `none` | Para apprise-api com autenticação ligada. |
 | `extraHeaders` | `[{ name, value: secret-ref }]` | vazio | Mesmo uso do ntfy. |
+
+No modo sem estado, as URLs resolvidas nunca aparecem em logs, erros ou na página de status (só o esquema, como `tgram://…`).
 
 ### 13. Observabilidade
 
@@ -317,19 +340,34 @@ Campos próprios:
 
 Meta: cobertura ≥ 90% no core e ≥ 80% nos plugins. O teste de dedupe registra o mesmo handler duas vezes para simular a #13732, já que o harness não reproduz a duplicação.
 
-## Fases e estimativa
+## Fases (ordem de execução)
 
-| Fase | Entrega | Esforço |
-| --- | --- | --- |
-| 0 | Esta spec revisada e plano de implementação | 0,5 dia |
-| 1 | Base do monorepo (workspace, Biome, CI, changesets) e scaffold dos 3 pacotes | 0,5 dia |
-| 2 | Core: contratos, mapeadores, política, dedupe, deep links, testes unitários | 1,5 dia |
-| 3 | Plugin ntfy v0.1: sender, manifest, schema, página de teste, testes de contrato e harness | 1 dia |
-| 4 | Core v0.2: silêncio, token bucket, digest, retry, job, observabilidade | 1,5–2 dias |
-| 5 | Plugin Apprise: sender, manifest, schema, página, testes | 1,5 dia |
-| 6 | Integração com compose, ponta a ponta numa instância local e com ntfy atrás do Cloudflare Access | 1 dia |
-| 7 | README dos 3 pacotes, release, PR no awesome-paperclip, comentários nas issues | 1 dia |
-| **Total** | | **cerca de 9–10 dias** (ntfy utilizável ao fim da fase 3, cerca de 3,5 dias) |
+Entrega única (v0.1 e v0.2 juntas), feita em sequência; cada fase termina com testes verdes e commit.
+
+| Fase | Entrega |
+| --- | --- |
+| 0 | Esta spec revisada e plano de implementação |
+| 1 | Base do monorepo (workspace, Biome, CI, changesets) e scaffold dos pacotes |
+| 2 | Core: contratos, mapeadores, política, dedupe, deep links, testes unitários |
+| 3 | Plugin ntfy: sender, manifest, schema, página de teste, testes de contrato e harness |
+| 4 | Core: silêncio, token bucket, digest, retry, job, observabilidade |
+| 5 | Plugin Apprise (com e sem estado): sender, manifest, schema, página, testes |
+| 6 | Integração com compose, ponta a ponta numa instância local e com ntfy atrás do Cloudflare Access |
+| 7 | READMEs, release, PR no awesome-paperclip, comentários nas issues |
+
+## Roadmap
+
+### v0.3 — aprovar e rejeitar pela notificação
+
+Botões "Aprovar" e "Rejeitar" na notificação do ntfy para `approval.created`. Base no SDK: `ctx.approvals.decide(id, { action, actorUserId }, companyId)` (capability `approvals.respond`), que valida no host se `actorUserId` é membro humano ativo da empresa, e `webhooks.receive` para o plugin receber o clique.
+
+Precisa de desenho de segurança próprio antes de implementar:
+
+- Token de ação de uso único, assinado (HMAC), com expiração curta e ligado a aprovação, ação e usuário; nunca reutilizável.
+- Qual usuário humano é o autor da decisão (configurado por empresa) e como isso aparece na auditoria.
+- Exposição do endpoint de webhook (no caso de instância atrás do Cloudflare Access, liberação só desse caminho).
+- Idempotência (`applied: false` em cliques repetidos) e resposta amigável no navegador.
+- Só no ntfy (ações HTTP); no Apprise não há botões.
 
 ## Critérios de aceite
 
@@ -342,7 +380,7 @@ Meta: cobertura ≥ 90% no core e ≥ 80% nos plugins. O teste de dedupe registr
 7. Com o servidor fora do ar, as notificações entram no retry e saem quando ele volta, dentro de `maxAgeMinutes`; passado o limite, aparecem em `notify.dropped` e no activity log.
 8. "Enviar notificação de teste" funciona com token em secret e com headers do Cloudflare Access.
 9. Com `allowPrivateNetwork: false`, destino em IP privado falha com mensagem clara; com `true`, funciona.
-10. O plugin Apprise entrega a um destino configurado no apprise-api, usando a tag conforme a severidade.
+10. O plugin Apprise entrega nos dois modos: com estado, usando a tag conforme a severidade; sem estado, respeitando `minSeverity` por destino e aplicando prioridade e link de clique em destinos ntfy.
 11. Nenhum log contém token, senha, `configKey` ou valor de header secreto.
 12. CI verde; cobertura dentro da meta; pacotes publicados com provenance.
 
@@ -354,4 +392,4 @@ Meta: cobertura ≥ 90% no core e ≥ 80% nos plugins. O teste de dedupe registr
 - **Condição de `issue.comment.created`** ("autor não é o responsável"): confirmar os campos disponíveis no payload.
 - **Custo do estado**: cada evento lê e grava o anel de dedupe. Aceitável no volume esperado; revisar se passar de dezenas de eventos por minuto.
 - **API do SDK instável**: o SDK segue a versão do Paperclip (calendário). Fixar `minimumHostVersion` e rodar o CI contra `latest` e `beta` do `@paperclipai/plugin-sdk`.
-- **Escopo npm**: definir o escopo do core (`@rodolphobrock`?) antes da fase 1.
+- **Nomes no npm**: `paperclip-plugin-ntfy` e `paperclip-plugin-apprise` estavam livres em 2026-09-27; conferir de novo antes do primeiro publish.
