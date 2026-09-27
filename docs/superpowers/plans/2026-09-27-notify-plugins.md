@@ -16,7 +16,7 @@
 - pnpm 9 (`packageManager: pnpm@9.15.9`); lockfile commitado.
 - TypeScript `strict`, sem `any`; payloads de evento são `unknown` e passam por guardas de tipo.
 - `@paperclipai/plugin-sdk` é `peerDependency` (`>=2026.916.1`) do core e dos plugins, e `devDependency` fixa em `2026.916.1`.
-- Manifests com `minimumHostVersion: "2026.916.1"`, `apiVersion: 1`, ID igual ao nome do pacote.
+- Manifests com `apiVersion: 1`, ID igual ao nome do pacote e `version` lida do `package.json`; sem `minimumHostVersion` (ver "Desvios da spec").
 - Nomes: plugins em `packages/plugin-<nome>` → `paperclip-plugin-<nome>`; bibliotecas em `packages/<família>-core` → `@rodolphobrock/paperclip-<família>-core`.
 - Licença MIT em todos os pacotes.
 - Fim de linha LF em tudo (`.gitattributes` com `eol=lf`); desenvolvimento no Windows com `npm_config_script_shell` apontando para o Git Bash.
@@ -110,7 +110,7 @@ Resultado: `pnpm install && pnpm lint && pnpm typecheck && pnpm test && pnpm bui
 
 **Interfaces:**
 - Consome: `SEVERITIES` do core (prova que o workspace resolve e que o esbuild empacota o core).
-- Produz: manifest `PaperclipPluginManifestV1` com `id: "paperclip-plugin-<nome>"`, `categories: ["connector"]`, `capabilities: ["events.subscribe"]`, `minimumHostVersion: "2026.916.1"`, `entrypoints.worker: "./dist/worker.js"`; worker `definePlugin({ setup, onHealth })` com `runWorker(plugin, import.meta.url)`. `package.json` com `paperclipPlugin: { manifest: "./dist/manifest.js", worker: "./dist/worker.js" }`.
+- Produz: manifest `PaperclipPluginManifestV1` com `id: "paperclip-plugin-<nome>"`, `categories: ["connector"]`, `capabilities: ["events.subscribe"]`, `entrypoints.worker: "./dist/worker.js"`; worker `definePlugin({ setup, onHealth })` com `runWorker(plugin, import.meta.url)`. `package.json` com `paperclipPlugin: { manifest: "./dist/manifest.js", worker: "./dist/worker.js" }`.
 
 - [ ] **Passo 1:** escrever `tests/plugin.spec.ts`: manifest tem ID e `minimumHostVersion` corretos; `createTestHarness({ manifest })` + `plugin.definition.setup(harness.ctx)` não lança; `onHealth()` devolve `status: "ok"` e cita as severidades conhecidas.
 - [ ] **Passo 2:** rodar o teste. Esperado: falha, módulos inexistentes.
@@ -181,3 +181,4 @@ READMEs dos três pacotes (instalação, configuração, risco de `allowPrivateN
 - **Tags de release:** a spec pede `v<pacote>@<versão>`; o Changesets gera `<pacote>@<versão>` e não tem opção para mudar o formato. O plano usa o padrão do Changesets.
 - **Escopo npm:** a spec deixa em aberto; o plano usa `@rodolphobrock`.
 - **Core nos plugins:** o core entra como `devDependency` dos plugins, porque o esbuild o empacota no worker; ele não é carregado em tempo de execução.
+- **`minimumHostVersion`:** a spec (decisão 15) pede `"2026.916.1"`, mas o servidor do Paperclip passa `hostVersion` `"0.0.0"` ao carregador de plugins (`server/src/app.ts`, `opts.hostVersion ?? "0.0.0"`; `server/src/index.ts` não informa a versão), e o carregador recusa a instalação. Os manifests não declaram o campo; a compatibilidade fica no `peerDependency` do SDK. Vale citar no PR upstream da decisão 14.
