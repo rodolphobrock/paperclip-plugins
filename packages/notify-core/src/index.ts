@@ -6,18 +6,27 @@ export {
   type RuleKey,
   SUBSCRIBED_EVENT_TYPES,
 } from "./catalog.js";
-export { type BaseConfig, baseConfigSchema, ConfigError, parseBaseConfig } from "./config.js";
+export {
+  type BaseConfig,
+  baseConfigSchema,
+  ConfigError,
+  DEFAULT_QUIET_HOURS,
+  parseBaseConfig,
+} from "./config.js";
+export { backoffMs, type DropReason, type HoldReason } from "./delivery.js";
 export { isRecord, isSecretRef, readNumber, readString } from "./guards.js";
 export { classifyError, classifyResponse, parseRetryAfter } from "./http-result.js";
 export { buildDeepLink } from "./links.js";
 export { type EventFacts, mapEvent, type NotificationDraft } from "./mappers.js";
 export {
   createNotifier,
+  DRAIN_JOB_KEY,
   type Notifier,
   type NotifierOptions,
   type TestResult,
   validateConfig,
 } from "./notifier.js";
+export { isQuiet, isValidTimezone, type QuietHours } from "./quiet-hours.js";
 export { redact } from "./redact.js";
 export {
   compareSeverity,

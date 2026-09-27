@@ -1,17 +1,21 @@
 import type { PluginContext, PluginEvent, ScopeKey } from "@paperclipai/plugin-sdk";
 import { SUBSCRIBED_EVENT_TYPES } from "./catalog.js";
 import { type BaseConfig, ConfigError } from "./config.js";
-import { DedupeStore, semanticKey } from "./dedupe.js";
+import { DedupeStore, type StatePort, semanticKey } from "./dedupe.js";
+import { createDelivery, type DeliveryObserver } from "./delivery.js";
 import { collectFacts, type HostPorts } from "./enrich.js";
 import { isRecord, readString } from "./guards.js";
 import { classifyError } from "./http-result.js";
 import { buildDeepLink, PrefixCache } from "./links.js";
 import { mapEvent } from "./mappers.js";
 import { applyPolicy } from "./policy.js";
+import { CompanyQueues, PendingIndex, type PendingStore } from "./queues.js";
+import { TokenBucket } from "./rate-limit.js";
 import { redact } from "./redact.js";
 import { type StatusSnapshot, StatusStore } from "./status.js";
 import {
   type FetchLike,
+  type LinkTarget,
   type Notification,
   type NotificationSender,
   type SecretRef,
@@ -21,6 +25,9 @@ import {
 
 const PRIVATE_FETCH_TIMEOUT_MS = 10_000;
 const SECRET_TTL_MS = 5 * 60_000;
+const HEALTH_FAILURE_WINDOW_MS = 5 * 60_000;
+const HEALTH_RETRY_BACKLOG = 100;
+export const DRAIN_JOB_KEY = "delivery-drain";
 
 export interface NotifierOptions<C extends BaseConfig> {
   sender: NotificationSender<C>;
@@ -31,25 +38,76 @@ export interface NotifierOptions<C extends BaseConfig> {
 
 export interface Notifier {
   setup(ctx: PluginContext): Promise<void>;
+  /** Resolves when every queued event and drain has finished (tests, `onShutdown`). */
+  idle(): Promise<void>;
+  /** For `onHealth`: degraded after a recent failed delivery or a large retry backlog. */
+  health(): Promise<{ status: "ok" | "degraded"; message?: string }>;
+  /** For `onConfigChanged`: forget one-time warnings so the new config is reported afresh. */
+  configChanged(companyId: string | null): void;
 }
 
 /**
- * The shared pipeline: event → config → facts → draft → policy → dedupe → link → send.
- * Call `setup` from the plugin's own `setup`; importing this module registers nothing.
+ * The shared pipeline: event → config → facts → draft → policy → dedupe → link → delivery
+ * (quiet hours, rate limit, digest, retry). Call `setup` from the plugin's own `setup`;
+ * importing this module registers nothing.
  */
 export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): Notifier {
   const clock = opts.clock ?? Date.now;
-  const queues = new Map<string, Promise<void>>();
+  const locks = new Map<string, Promise<void>>();
   const warned = new Set<string>();
   const secrets = new Map<string, { value: string; at: number }>();
+  const bucket = new TokenBucket();
+  const retryBacklog = new Map<string, number>();
+  let lastOutcome: { ok: boolean; at: number } | undefined;
+
+  /** Runs tasks for one company one at a time, so events and the drain job share state safely. */
+  const withLock = (companyId: string, task: () => Promise<void>): Promise<void> => {
+    const previous = locks.get(companyId) ?? Promise.resolve();
+    const next = previous.then(task);
+    const settled = next.catch(() => undefined);
+    locks.set(companyId, settled);
+    void settled.then(() => {
+      if (locks.get(companyId) === settled) locks.delete(companyId);
+    });
+    return next;
+  };
 
   return {
+    async idle() {
+      while (locks.size > 0) await Promise.all(locks.values());
+    },
+
+    async health() {
+      const backlog = Math.max(0, ...retryBacklog.values());
+      if (backlog > HEALTH_RETRY_BACKLOG) {
+        return { status: "degraded", message: `${backlog} notifications waiting to be retried` };
+      }
+      if (lastOutcome !== undefined && !lastOutcome.ok) {
+        if (clock() - lastOutcome.at < HEALTH_FAILURE_WINDOW_MS) {
+          return { status: "degraded", message: "The last delivery failed" };
+        }
+      }
+      return { status: "ok" };
+    },
+
+    configChanged(companyId) {
+      for (const key of [...warned]) {
+        if (companyId === null || key.endsWith(`:${companyId}`)) warned.delete(key);
+      }
+      // A rotated secret must not be served from cache after the operator saves.
+      for (const key of [...secrets.keys()]) {
+        if (companyId === null || key.startsWith(`${companyId}:`)) secrets.delete(key);
+      }
+    },
+
     async setup(ctx) {
       const prefixes = new PrefixCache(
         async (companyId) => (await ctx.companies.get(companyId))?.issuePrefix ?? null,
         clock,
       );
       const ports = hostPorts(ctx);
+      const errorText = (error: unknown) =>
+        error instanceof Error ? error.message : String(error);
 
       const warnOnce = (key: string, message: string, meta: Record<string, unknown>) => {
         if (warned.has(key)) return;
@@ -57,8 +115,8 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         ctx.logger.warn(message, meta);
       };
 
-      const metric = (name: string, tags: Record<string, string>) => {
-        ctx.metrics.write(name, 1, tags).catch(() => undefined);
+      const metric = (name: string, tags: Record<string, string>, value = 1) => {
+        ctx.metrics.write(name, value, tags).catch(() => undefined);
       };
 
       const readConfig = async (companyId: string): Promise<ConfigRead<C>> => {
@@ -67,10 +125,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         try {
           return { state: "ok", config: opts.parseConfig(raw) };
         } catch (error) {
-          return {
-            state: "invalid",
-            error: error instanceof Error ? error.message : String(error),
-          };
+          return { state: "invalid", error: errorText(error) };
         }
       };
 
@@ -88,6 +143,21 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         return read.config.enabled ? read.config : null;
       };
 
+      const resolveSecret = async (ref: SecretRef, configPath: string, companyId: string) => {
+        const cacheKey = `${companyId}:${ref.secretId}:${ref.version ?? "latest"}`;
+        const cached = secrets.get(cacheKey);
+        const now = clock();
+        if (cached !== undefined && now - cached.at < SECRET_TTL_MS) return cached.value;
+        try {
+          const value = await ctx.secrets.resolve(ref, { companyId, configPath });
+          secrets.set(cacheKey, { value, at: now });
+          return value;
+        } catch (error) {
+          // Deleted refs and the host's 30 reads/min limit are not fixed by retrying soon.
+          throw new SecretResolutionError(configPath, error);
+        }
+      };
+
       const depsFor = (config: C, companyId: string): SenderDeps => ({
         fetch: selectFetch(ctx, config),
         resolveSecret: (ref, configPath) => resolveSecret(ref, configPath, companyId),
@@ -95,18 +165,103 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
       });
 
       const recordStatus = async (companyId: string, error: string | undefined) => {
+        lastOutcome = { ok: error === undefined, at: clock() };
         const store = new StatusStore(stateOf(ctx, companyId, "status"));
         const at = new Date(clock());
         try {
           if (error === undefined) await store.recordSuccess(at);
           else await store.recordError(at, error);
         } catch (failure) {
-          ctx.logger.warn("notify.status_write_failed", {
+          warnOnce(`status:${companyId}`, "notify.status_write_failed", {
             companyId,
-            error: failure instanceof Error ? failure.message : String(failure),
+            error: errorText(failure),
           });
         }
       };
+
+      const link = async (config: C, companyId: string, target: LinkTarget) => {
+        if (config.paperclipBaseUrl === undefined) {
+          warnOnce(`base-url:${companyId}`, "notify.missing_base_url", { companyId });
+          return undefined;
+        }
+        try {
+          const prefix = await prefixes.get(companyId);
+          return prefix !== null
+            ? buildDeepLink(config.paperclipBaseUrl, prefix, target)
+            : undefined;
+        } catch (error) {
+          ctx.logger.warn("notify.link_failed", { companyId, error: errorText(error) });
+          return undefined;
+        }
+      };
+
+      const tagsOf = (n: Notification) => ({ eventType: n.eventType, severity: n.severity });
+
+      const observer: DeliveryObserver = {
+        async sent(n) {
+          ctx.logger.info("notify.sent", { ...tagsOf(n), key: n.key, sender: opts.sender.name });
+          metric("notify.sent", tagsOf(n));
+          await recordStatus(n.companyId, undefined);
+        },
+        async failed(n, error) {
+          ctx.logger.error("notify.failed", { ...tagsOf(n), key: n.key, error, retryable: false });
+          metric("notify.failed", tagsOf(n));
+          await recordStatus(n.companyId, error);
+        },
+        queued(n, reason) {
+          ctx.logger.info("notify.queued", { ...tagsOf(n), key: n.key, reason });
+          metric("notify.queued", { ...tagsOf(n), reason });
+        },
+        async retry(n, attempt, error) {
+          ctx.logger.warn("notify.retry", { ...tagsOf(n), key: n.key, attempt, error });
+          metric("notify.retry", tagsOf(n));
+          await recordStatus(n.companyId, error);
+        },
+        async dropped(n, reason, error) {
+          ctx.logger.error("notify.dropped", { ...tagsOf(n), key: n.key, reason, error });
+          metric("notify.dropped", { ...tagsOf(n), reason });
+          lastOutcome = { ok: false, at: clock() };
+          await ctx.activity
+            .log({
+              companyId: n.companyId,
+              message: `Notification not delivered (${reason}): ${n.title}`,
+              metadata: { eventType: n.eventType, reason, ...(error ? { error } : {}) },
+            })
+            .catch((failure: unknown) =>
+              ctx.logger.warn("notify.activity_log_failed", { error: errorText(failure) }),
+            );
+        },
+        digested(companyId, count) {
+          metric("notify.digested", { companyId }, count);
+        },
+      };
+
+      const delivery = createDelivery<C>({
+        clock,
+        bucket,
+        send: (n, config) =>
+          opts.sender.send(n, config, depsFor(config, n.companyId)).catch(classifyError),
+        loadConfig,
+        queuesFor: (companyId) => {
+          const retry = stateOf(ctx, companyId, "retry");
+          return new CompanyQueues({
+            retry: {
+              get: retry.get,
+              set: async (value) => {
+                retryBacklog.set(companyId, Array.isArray(value) ? value.length : 0);
+                await retry.set(value);
+              },
+            },
+            digest: stateOf(ctx, companyId, "digest"),
+          });
+        },
+        pending: lockedPending(new PendingIndex(instanceState(ctx, "pending")), withLock),
+        onDrainError: (companyId, error) =>
+          ctx.logger.error("notify.drain_failed", { companyId, error: errorText(error) }),
+        inboxUrl: (companyId, config) => link(config, companyId, { kind: "inbox" }),
+        withLock,
+        observer,
+      });
 
       const handle = async (event: PluginEvent) => {
         const { companyId } = event;
@@ -131,7 +286,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         }
 
         const key = semanticKey(event.eventType, event.entityId, draft.factKey);
-        const dedupe = new DedupeStore(stateOf(ctx, companyId));
+        const dedupe = new DedupeStore(stateOf(ctx, companyId, "dedupe"));
         const keys = [`eventId:${event.eventId}`, key];
         const now = clock();
         if (await dedupe.seen(keys, now)) {
@@ -139,7 +294,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
           metric("notify.deduped", tags);
           return;
         }
-        // Remember before sending: at most one attempt per fact, even if the send hangs or crashes.
+        // Remember before delivering: failures are retried from the queue, never re-derived.
         await dedupe.remember(keys, now);
 
         const notification: Notification = {
@@ -154,80 +309,31 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
           occurredAt: event.occurredAt,
         };
         if (draft.link !== undefined) {
-          if (config.paperclipBaseUrl === undefined) {
-            warnOnce(`base-url:${companyId}`, "notify.missing_base_url", { companyId });
-          } else {
-            try {
-              const prefix = await prefixes.get(companyId);
-              const link =
-                prefix !== null
-                  ? buildDeepLink(config.paperclipBaseUrl, prefix, draft.link)
-                  : undefined;
-              if (link !== undefined) notification.url = link;
-            } catch (error) {
-              ctx.logger.warn("notify.link_failed", {
-                companyId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-          }
+          const url = await link(config, companyId, draft.link);
+          if (url !== undefined) notification.url = url;
         }
+        await delivery.deliver(notification, config);
+      };
 
-        const result = await opts.sender
-          .send(notification, config, depsFor(config, companyId))
-          .catch(classifyError);
-        await recordStatus(companyId, result.ok ? undefined : result.error);
-        const logTags = { ...tags, severity: notification.severity, sender: opts.sender.name };
-        if (result.ok) {
-          ctx.logger.info("notify.sent", { ...logTags, key });
-          metric("notify.sent", { eventType: event.eventType, severity: notification.severity });
-        } else {
-          ctx.logger.error("notify.failed", {
-            ...logTags,
-            key,
-            error: result.error,
-            retryable: result.retryable,
+      // Event delivery to the worker is fire-and-forget on the host side; deliveries run in the
+      // background, serialized per company.
+      const onEvent = async (event: PluginEvent): Promise<void> => {
+        void withLock(event.companyId, () => handle(event)).catch((error: unknown) => {
+          ctx.logger.error("notify.handler_failed", {
+            eventType: event.eventType,
+            error: errorText(error),
           });
-          metric("notify.failed", { eventType: event.eventType, severity: notification.severity });
-        }
-      };
-
-      const resolveSecret = async (ref: SecretRef, configPath: string, companyId: string) => {
-        const cacheKey = `${companyId}:${ref.secretId}:${ref.version ?? "latest"}`;
-        const cached = secrets.get(cacheKey);
-        const now = clock();
-        if (cached !== undefined && now - cached.at < SECRET_TTL_MS) return cached.value;
-        try {
-          const value = await ctx.secrets.resolve(ref, { companyId, configPath });
-          secrets.set(cacheKey, { value, at: now });
-          return value;
-        } catch (error) {
-          // Deleted refs and the host's 30 reads/min limit are not fixed by retrying soon.
-          throw new SecretResolutionError(configPath, error);
-        }
-      };
-
-      // Serialized per company so concurrent deliveries cannot race on the dedupe ring.
-      const enqueue = (event: PluginEvent): Promise<void> => {
-        const previous = queues.get(event.companyId) ?? Promise.resolve();
-        const next = previous.then(() =>
-          handle(event).catch((error: unknown) => {
-            ctx.logger.error("notify.handler_failed", {
-              eventType: event.eventType,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }),
-        );
-        queues.set(event.companyId, next);
-        return next.finally(() => {
-          if (queues.get(event.companyId) === next) queues.delete(event.companyId);
         });
       };
 
       // Exactly one subscription per type (paperclip#13732 multiplies duplicate registrations).
       for (const eventType of SUBSCRIBED_EVENT_TYPES) {
-        ctx.events.on(eventType, enqueue);
+        ctx.events.on(eventType, onEvent);
       }
+
+      ctx.jobs.register(DRAIN_JOB_KEY, async () => {
+        await delivery.drain();
+      });
 
       // The host puts the authorized company into params.companyId for the settings page.
       ctx.data.register("status", async (params): Promise<StatusSnapshot> => {
@@ -289,7 +395,9 @@ function companyOf(params: Record<string, unknown>): string | undefined {
   return readString(params, "companyId");
 }
 
-function stateOf(ctx: PluginContext, companyId: string, stateKey: "dedupe" | "status" = "dedupe") {
+type CompanyStateKey = "dedupe" | "status" | "retry" | "digest";
+
+function stateOf(ctx: PluginContext, companyId: string, stateKey: CompanyStateKey): StatePort {
   const scope: ScopeKey = {
     scopeKind: "company",
     scopeId: companyId,
@@ -299,6 +407,36 @@ function stateOf(ctx: PluginContext, companyId: string, stateKey: "dedupe" | "st
   return {
     get: () => ctx.state.get(scope),
     set: (value: unknown) => ctx.state.set(scope, value),
+  };
+}
+
+function instanceState(ctx: PluginContext, stateKey: string): StatePort {
+  const scope: ScopeKey = { scopeKind: "instance", namespace: "notify", stateKey };
+  return {
+    get: () => ctx.state.get(scope),
+    set: (value: unknown) => ctx.state.set(scope, value),
+  };
+}
+
+/**
+ * The pending index is one instance-wide key shared by every company, while the other
+ * locks are per company; give its read-modify-write cycles a lock of their own.
+ */
+function lockedPending(
+  index: PendingIndex,
+  withLock: (key: string, task: () => Promise<void>) => Promise<void>,
+): PendingStore {
+  const key = "\u0000pending-index";
+  return {
+    list: async () => {
+      let ids: string[] = [];
+      await withLock(key, async () => {
+        ids = await index.list();
+      });
+      return ids;
+    },
+    add: (companyId) => withLock(key, () => index.add(companyId)),
+    remove: (companyId) => withLock(key, () => index.remove(companyId)),
   };
 }
 

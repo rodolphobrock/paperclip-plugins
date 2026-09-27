@@ -1,3 +1,4 @@
+import { DRAIN_JOB_KEY } from "@paperclip-plugins/notify-core";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import pkg from "../package.json" with { type: "json" };
 import { ntfyConfigSchema } from "./config.js";
@@ -22,6 +23,17 @@ const manifest: PaperclipPluginManifestV1 = {
     "issues.read",
     "metrics.write",
     "instance.settings.register",
+    "jobs.schedule",
+    "activity.log.write",
+  ],
+  jobs: [
+    {
+      jobKey: DRAIN_JOB_KEY,
+      displayName: "Deliver queued notifications",
+      description:
+        "Retries failed deliveries and sends digests held by quiet hours or the rate limit.",
+      schedule: "*/1 * * * *",
+    },
   ],
   entrypoints: {
     worker: "./dist/worker.js",

@@ -8,7 +8,8 @@ export type SecretRef = EnvSecretRefBinding;
 export type LinkTarget =
   | { kind: "issue"; identifier: string }
   | { kind: "approval"; approvalId: string }
-  | { kind: "run"; agentId: string; runId: string };
+  | { kind: "run"; agentId: string; runId: string }
+  | { kind: "inbox" };
 
 /** A normalized notification, ready for a sender. */
 export interface Notification {

@@ -1,6 +1,7 @@
 import type { JsonSchema } from "@paperclipai/plugin-sdk";
 import { DEFAULT_RULES, type EventRule, isRuleKey, RULE_KEYS, type RuleKey } from "./catalog.js";
 import { isRecord } from "./guards.js";
+import { isValidTimezone, type QuietHours, TIME_PATTERN } from "./quiet-hours.js";
 import { isSeverity, SEVERITIES, type Severity } from "./severity.js";
 
 /** Config fields every notifier plugin shares (spec decision 7). */
@@ -12,7 +13,26 @@ export interface BaseConfig {
   minSeverity: Severity;
   filters: { projectIds: string[]; agentIds: string[] };
   network: { allowPrivateNetwork: boolean };
+  quietHours: QuietHours;
+  rateLimit: { perMinute: number; digestWindowMinutes: number };
+  retry: { maxAttempts: number; maxAgeMinutes: number };
 }
+
+export const DEFAULT_QUIET_HOURS: Readonly<QuietHours> = {
+  enabled: false,
+  start: "22:00",
+  end: "07:00",
+  timezone: "UTC",
+  allowUrgent: true,
+};
+
+/** Inclusive integer ranges for the delivery settings. */
+const LIMITS = {
+  "rateLimit.perMinute": [1, 600, 10],
+  "rateLimit.digestWindowMinutes": [1, 1440, 5],
+  "retry.maxAttempts": [1, 20, 5],
+  "retry.maxAgeMinutes": [1, 1440, 60],
+} as const;
 
 export class ConfigError extends Error {
   readonly issues: string[];
@@ -68,9 +88,55 @@ export function parseBaseConfig(raw: unknown): BaseConfig {
     };
   }
 
+  const int = (value: unknown, path: keyof typeof LIMITS): number => {
+    const [min, max, fallback] = LIMITS[path];
+    if (value === undefined) return fallback;
+    if (typeof value === "number" && Number.isInteger(value) && value >= min && value <= max) {
+      return value;
+    }
+    issues.push(`${path} must be a whole number from ${min} to ${max}`);
+    return fallback;
+  };
+  const time = (value: unknown, path: string, fallback: string): string => {
+    if (value === undefined) return fallback;
+    if (typeof value === "string" && TIME_PATTERN.test(value)) return value;
+    issues.push(`${path} must be a time as HH:MM (00:00 to 23:59)`);
+    return fallback;
+  };
+
+  const quiet = object(input.quietHours, "quietHours");
+  const quietHours: QuietHours = {
+    enabled: bool(quiet.enabled, "quietHours.enabled", DEFAULT_QUIET_HOURS.enabled),
+    start: time(quiet.start, "quietHours.start", DEFAULT_QUIET_HOURS.start),
+    end: time(quiet.end, "quietHours.end", DEFAULT_QUIET_HOURS.end),
+    timezone: DEFAULT_QUIET_HOURS.timezone,
+    allowUrgent: bool(quiet.allowUrgent, "quietHours.allowUrgent", DEFAULT_QUIET_HOURS.allowUrgent),
+  };
+  if (quiet.timezone !== undefined) {
+    if (typeof quiet.timezone === "string" && isValidTimezone(quiet.timezone)) {
+      quietHours.timezone = quiet.timezone;
+    } else {
+      issues.push("quietHours.timezone must be an IANA timezone such as America/Sao_Paulo");
+    }
+  }
+  if (quietHours.enabled && quietHours.start === quietHours.end) {
+    issues.push("quietHours.start and quietHours.end must differ when quiet hours are enabled");
+  }
+
+  const rateLimit = object(input.rateLimit, "rateLimit");
+  const retry = object(input.retry, "retry");
   const filters = object(input.filters, "filters");
   const network = object(input.network, "network");
   const config: BaseConfig = {
+    quietHours,
+    rateLimit: {
+      perMinute: int(rateLimit.perMinute, "rateLimit.perMinute"),
+      digestWindowMinutes: int(rateLimit.digestWindowMinutes, "rateLimit.digestWindowMinutes"),
+    },
+    retry: {
+      maxAttempts: int(retry.maxAttempts, "retry.maxAttempts"),
+      maxAgeMinutes: int(retry.maxAgeMinutes, "retry.maxAgeMinutes"),
+    },
     enabled: bool(input.enabled, "enabled", true),
     events,
     minSeverity: severity(input.minSeverity, "minSeverity", "low"),
@@ -159,5 +225,44 @@ export const baseConfigSchema: { properties: Record<string, JsonSchema> } = {
         },
       },
     },
+    quietHours: {
+      type: "object",
+      title: "Quiet hours",
+      description:
+        "Hold notifications below urgent during this window and send them as one digest when it ends.",
+      properties: {
+        enabled: { type: "boolean", default: DEFAULT_QUIET_HOURS.enabled },
+        start: { type: "string", pattern: TIME_PATTERN.source, default: DEFAULT_QUIET_HOURS.start },
+        end: { type: "string", pattern: TIME_PATTERN.source, default: DEFAULT_QUIET_HOURS.end },
+        timezone: {
+          type: "string",
+          default: DEFAULT_QUIET_HOURS.timezone,
+          description: "IANA timezone, e.g. America/Sao_Paulo.",
+        },
+        allowUrgent: { type: "boolean", default: DEFAULT_QUIET_HOURS.allowUrgent },
+      },
+    },
+    rateLimit: {
+      type: "object",
+      title: "Rate limit",
+      description: "Notifications above the limit are grouped into a digest.",
+      properties: {
+        perMinute: integerSchema("rateLimit.perMinute"),
+        digestWindowMinutes: integerSchema("rateLimit.digestWindowMinutes"),
+      },
+    },
+    retry: {
+      type: "object",
+      title: "Retry",
+      properties: {
+        maxAttempts: integerSchema("retry.maxAttempts"),
+        maxAgeMinutes: integerSchema("retry.maxAgeMinutes"),
+      },
+    },
   },
 };
+
+function integerSchema(path: keyof typeof LIMITS): JsonSchema {
+  const [minimum, maximum, fallback] = LIMITS[path];
+  return { type: "integer", minimum, maximum, default: fallback };
+}

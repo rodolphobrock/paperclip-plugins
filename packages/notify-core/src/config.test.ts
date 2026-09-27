@@ -42,6 +42,15 @@ describe("parseBaseConfig", () => {
       minSeverity: "low",
       filters: { projectIds: [], agentIds: [] },
       network: { allowPrivateNetwork: false },
+      quietHours: {
+        enabled: false,
+        start: "22:00",
+        end: "07:00",
+        timezone: "UTC",
+        allowUrgent: true,
+      },
+      rateLimit: { perMinute: 10, digestWindowMinutes: 5 },
+      retry: { maxAttempts: 5, maxAgeMinutes: 60 },
     });
   });
 
@@ -112,9 +121,82 @@ describe("parseBaseConfig", () => {
 describe("baseConfigSchema", () => {
   it("declares one property per config field and one per event rule", () => {
     expect(Object.keys(baseConfigSchema.properties).sort()).toEqual(
-      ["enabled", "events", "filters", "minSeverity", "network", "paperclipBaseUrl"].sort(),
+      [
+        "enabled",
+        "events",
+        "filters",
+        "minSeverity",
+        "network",
+        "paperclipBaseUrl",
+        "quietHours",
+        "rateLimit",
+        "retry",
+      ].sort(),
     );
     const events = baseConfigSchema.properties.events as { properties: Record<string, unknown> };
     expect(Object.keys(events.properties).sort()).toEqual([...RULE_KEYS].sort());
+  });
+});
+
+describe("delivery settings", () => {
+  const issuesOf = (raw: unknown): string[] => {
+    try {
+      parseBaseConfig(raw);
+      return [];
+    } catch (error) {
+      return (error as ConfigError).issues;
+    }
+  };
+
+  it("keeps valid quiet hours, rate limit and retry settings", () => {
+    const config = parseBaseConfig({
+      quietHours: { enabled: true, start: "23:30", end: "06:15", timezone: "America/Sao_Paulo" },
+      rateLimit: { perMinute: 30, digestWindowMinutes: 15 },
+      retry: { maxAttempts: 3, maxAgeMinutes: 120 },
+    });
+    expect(config.quietHours).toEqual({
+      enabled: true,
+      start: "23:30",
+      end: "06:15",
+      timezone: "America/Sao_Paulo",
+      allowUrgent: true,
+    });
+    expect(config.rateLimit).toEqual({ perMinute: 30, digestWindowMinutes: 15 });
+    expect(config.retry).toEqual({ maxAttempts: 3, maxAgeMinutes: 120 });
+  });
+
+  it("rejects an unknown timezone and malformed times", () => {
+    const text = issuesOf({
+      quietHours: {
+        enabled: true,
+        start: "25:00",
+        end: "7",
+        timezone: "Mars/Olympus",
+        allowUrgent: "no",
+      },
+    }).join("\n");
+    expect(text).toMatch(/quietHours\.start/);
+    expect(text).toMatch(/quietHours\.end/);
+    expect(text).toMatch(/quietHours\.timezone/);
+    expect(text).toMatch(/quietHours\.allowUrgent/);
+  });
+
+  it("rejects an empty quiet window when enabled", () => {
+    expect(issuesOf({ quietHours: { enabled: true, start: "22:00", end: "22:00" } })[0]).toMatch(
+      /quietHours/,
+    );
+    expect(issuesOf({ quietHours: { enabled: false, start: "22:00", end: "22:00" } })).toEqual([]);
+  });
+
+  it.each([
+    [{ rateLimit: { perMinute: 0 } }, /rateLimit\.perMinute/],
+    [{ rateLimit: { perMinute: 1.5 } }, /rateLimit\.perMinute/],
+    [{ rateLimit: { digestWindowMinutes: 2000 } }, /rateLimit\.digestWindowMinutes/],
+    [{ retry: { maxAttempts: 0 } }, /retry\.maxAttempts/],
+    [{ retry: { maxAttempts: 21 } }, /retry\.maxAttempts/],
+    [{ retry: { maxAgeMinutes: "60" } }, /retry\.maxAgeMinutes/],
+    [{ retry: "fast" }, /retry must be an object/],
+  ])("rejects out-of-range numbers %j", (raw, pattern) => {
+    expect(issuesOf(raw).join("\n")).toMatch(pattern);
   });
 });

@@ -22,6 +22,8 @@ function routeSegments(target: LinkTarget): string[] {
       return ["approvals", target.approvalId];
     case "run":
       return ["agents", target.agentId, "runs", target.runId];
+    case "inbox":
+      return ["inbox"];
   }
 }
 
