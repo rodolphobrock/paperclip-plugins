@@ -489,3 +489,43 @@ describe("delivery pipeline", () => {
     expect(await notifier.health()).toEqual({ status: "ok" });
   });
 });
+
+describe("delivery review fixes", () => {
+  it("keeps every company in the pending index when failures arrive together", async () => {
+    const { harness, notifier } = await setup(
+      CONFIGURED,
+      fakeSender({ ok: false, retryable: true, error: "HTTP 503" }),
+    );
+    await Promise.all(
+      ["co-a", "co-b", "co-c"].map((companyId, i) =>
+        harness.emit(
+          "agent.run.failed",
+          { runId: `r${i}`, agentId: "ag-1", status: "failed" },
+          {
+            entityId: `r${i}`,
+            companyId,
+          },
+        ),
+      ),
+    );
+    await notifier.idle();
+    const pending = harness.getState({
+      scopeKind: "instance",
+      namespace: "notify",
+      stateKey: "pending",
+    });
+    expect([...(pending as string[])].sort()).toEqual(["co-a", "co-b", "co-c"]);
+  });
+
+  it("forgets cached secrets when the config changes", async () => {
+    const { harness, notifier, sent } = await setup(CONFIGURED);
+    const resolve = vi.spyOn(harness.ctx.secrets, "resolve").mockResolvedValue("old");
+    await harness.emit(...runFailed());
+    const ref = { type: "secret_ref", secretId: "sec-1" } as const;
+    await sent[0]?.deps.resolveSecret(ref, "auth.token");
+    notifier.configChanged(COMPANY);
+    resolve.mockResolvedValue("new");
+    expect(await sent[0]?.deps.resolveSecret(ref, "auth.token")).toBe("new");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+});

@@ -9,7 +9,7 @@ import { classifyError } from "./http-result.js";
 import { buildDeepLink, PrefixCache } from "./links.js";
 import { mapEvent } from "./mappers.js";
 import { applyPolicy } from "./policy.js";
-import { CompanyQueues, PendingIndex } from "./queues.js";
+import { CompanyQueues, PendingIndex, type PendingStore } from "./queues.js";
 import { TokenBucket } from "./rate-limit.js";
 import { redact } from "./redact.js";
 import { type StatusSnapshot, StatusStore } from "./status.js";
@@ -93,6 +93,10 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
     configChanged(companyId) {
       for (const key of [...warned]) {
         if (companyId === null || key.endsWith(`:${companyId}`)) warned.delete(key);
+      }
+      // A rotated secret must not be served from cache after the operator saves.
+      for (const key of [...secrets.keys()]) {
+        if (companyId === null || key.startsWith(`${companyId}:`)) secrets.delete(key);
       }
     },
 
@@ -251,7 +255,9 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
             digest: stateOf(ctx, companyId, "digest"),
           });
         },
-        pending: new PendingIndex(instanceState(ctx, "pending")),
+        pending: lockedPending(new PendingIndex(instanceState(ctx, "pending")), withLock),
+        onDrainError: (companyId, error) =>
+          ctx.logger.error("notify.drain_failed", { companyId, error: errorText(error) }),
         inboxUrl: (companyId, config) => link(config, companyId, { kind: "inbox" }),
         withLock,
         observer,
@@ -309,7 +315,7 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         await delivery.deliver(notification, config);
       };
 
-      // The host waits on this handler over RPC (30 s timeout); delivery continues in the
+      // Event delivery to the worker is fire-and-forget on the host side; deliveries run in the
       // background, serialized per company.
       const onEvent = async (event: PluginEvent): Promise<void> => {
         void withLock(event.companyId, () => handle(event)).catch((error: unknown) => {
@@ -409,6 +415,28 @@ function instanceState(ctx: PluginContext, stateKey: string): StatePort {
   return {
     get: () => ctx.state.get(scope),
     set: (value: unknown) => ctx.state.set(scope, value),
+  };
+}
+
+/**
+ * The pending index is one instance-wide key shared by every company, while the other
+ * locks are per company; give its read-modify-write cycles a lock of their own.
+ */
+function lockedPending(
+  index: PendingIndex,
+  withLock: (key: string, task: () => Promise<void>) => Promise<void>,
+): PendingStore {
+  const key = "\u0000pending-index";
+  return {
+    list: async () => {
+      let ids: string[] = [];
+      await withLock(key, async () => {
+        ids = await index.list();
+      });
+      return ids;
+    },
+    add: (companyId) => withLock(key, () => index.add(companyId)),
+    remove: (companyId) => withLock(key, () => index.remove(companyId)),
   };
 }
 

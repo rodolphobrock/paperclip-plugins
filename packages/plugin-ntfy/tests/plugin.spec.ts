@@ -138,3 +138,11 @@ describe("paperclip-plugin-ntfy worker", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("multi-company", () => {
+  // Without it the host rejects a second company's configChanged (CROSS_TENANT_CONFIG) and logs a
+  // misleading "single-tenant plugin configured for multiple companies" warning at startup.
+  it("declares that one worker serves many companies (state is keyed by company)", () => {
+    expect(plugin.definition.multiCompanyConfig).toBe(true);
+  });
+});

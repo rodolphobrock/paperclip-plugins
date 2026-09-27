@@ -20,6 +20,16 @@ export interface DigestState {
   /** When the first held-back notification arrived. */
   since: number;
   items: Notification[];
+  /** Set after a retryable send failure, to expire the digest after `retry.maxAgeMinutes`. */
+  firstFailureAt?: number;
+  failures?: number;
+}
+
+/** What the delivery needs from the pending index (a PendingIndex, possibly behind a lock). */
+export interface PendingStore {
+  list(): Promise<string[]>;
+  add(companyId: string): Promise<void>;
+  remove(companyId: string): Promise<void>;
 }
 
 export function pushCapped<T>(list: T[], item: T, cap: number): { list: T[]; dropped: T[] } {
@@ -51,7 +61,11 @@ export class CompanyQueues {
     const raw = await this.#digest.get();
     if (!isRecord(raw) || typeof raw.since !== "number" || !Array.isArray(raw.items)) return null;
     const items = raw.items.filter(isNotification);
-    return items.length > 0 ? { since: raw.since, items } : null;
+    if (items.length === 0) return null;
+    const digest: DigestState = { since: raw.since, items };
+    if (typeof raw.firstFailureAt === "number") digest.firstFailureAt = raw.firstFailureAt;
+    if (typeof raw.failures === "number") digest.failures = raw.failures;
+    return digest;
   }
 
   async writeDigest(state: DigestState | null): Promise<void> {
@@ -64,7 +78,7 @@ export class CompanyQueues {
 }
 
 /** Instance-wide list of companies with queued work, so the drain job knows where to look. */
-export class PendingIndex {
+export class PendingIndex implements PendingStore {
   readonly #state: StatePort;
 
   constructor(state: StatePort) {

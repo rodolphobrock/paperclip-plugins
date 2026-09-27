@@ -7,6 +7,9 @@ import { ntfySender } from "./sender.js";
 export const notifier = createNotifier({ sender: ntfySender, parseConfig: parseNtfyConfig });
 
 const plugin = definePlugin({
+  // Config, queues and status are all keyed by company; one worker serves every company.
+  multiCompanyConfig: true,
+
   async setup(ctx) {
     await notifier.setup(ctx);
   },

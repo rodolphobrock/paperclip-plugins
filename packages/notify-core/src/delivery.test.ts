@@ -277,3 +277,69 @@ describe("drain", () => {
     expect(withLock.mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
   });
 });
+
+describe("review fixes", () => {
+  it("sends urgent notifications past an empty rate limit when urgent is allowed", async () => {
+    const limited = parseBaseConfig({ rateLimit: { perMinute: 1 } });
+    const delivery = setup();
+    await delivery.deliver(n("a"), limited);
+    await delivery.deliver(n("u", { severity: "urgent" }), limited);
+    expect(calls).toEqual(["sent a", "sent u"]);
+  });
+
+  it("does not retry when maxAttempts is 1", async () => {
+    results = [{ ok: false, retryable: true, error: "HTTP 503" }];
+    await setup().deliver(n("a"), parseBaseConfig({ retry: { maxAttempts: 1 } }));
+    expect(calls).toEqual(["dropped a exhausted"]);
+    expect(retryState.value).toBeNull();
+  });
+
+  it("reports and eventually drops a digest that keeps failing", async () => {
+    config = parseBaseConfig({
+      rateLimit: { perMinute: 1, digestWindowMinutes: 1 },
+      retry: { maxAgeMinutes: 10 },
+    });
+    const delivery = setup();
+    await delivery.deliver(n("a"), config);
+    await delivery.deliver(n("b"), config);
+    calls = [];
+    for (let i = 0; i < 12; i++) {
+      now += MIN;
+      results = [{ ok: false, retryable: true, error: "HTTP 503" }];
+      await delivery.drain();
+    }
+    expect(calls.filter((c) => c.startsWith("retry digest"))).not.toHaveLength(0);
+    expect(calls).toContain("dropped b expired");
+    expect(digestState.value).toBeNull();
+  });
+
+  it("keeps draining other companies when one fails, and forgets out-of-scope ones", async () => {
+    pendingState.value = ["gone", "broken", "ok"];
+    const drained: string[] = [];
+    const errors: string[] = [];
+    const delivery = createDelivery<BaseConfig>({
+      clock: () => now,
+      bucket: new TokenBucket(),
+      send: async () => ({ ok: true }),
+      loadConfig: async (companyId) => {
+        if (companyId === "gone") {
+          throw Object.assign(new Error("scope denied"), { name: "InvocationScopeDeniedError" });
+        }
+        if (companyId === "broken") throw new Error("state RPC failed");
+        drained.push(companyId);
+        return parseBaseConfig({});
+      },
+      queuesFor: () => new CompanyQueues({ retry: memory(), digest: memory() }),
+      pending: new PendingIndex(pendingState),
+      inboxUrl: async () => undefined,
+      withLock: (_c, fn) => fn(),
+      onDrainError: (companyId, error) =>
+        void errors.push(`${companyId}: ${(error as Error).message}`),
+      observer: { sent() {}, failed() {}, queued() {}, retry() {}, dropped() {}, digested() {} },
+    });
+    await delivery.drain();
+    expect(drained).toEqual(["ok"]);
+    expect(errors).toEqual(["gone: scope denied", "broken: state RPC failed"]);
+    expect(await new PendingIndex(pendingState).list()).toEqual(["broken"]);
+  });
+});
