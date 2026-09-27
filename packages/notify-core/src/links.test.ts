@@ -71,3 +71,9 @@ describe("PrefixCache", () => {
     expect(await cache.get("co-1")).toBe("PAP");
   });
 });
+
+describe("inbox link", () => {
+  it("points at the company inbox", () => {
+    expect(buildDeepLink(BASE, "PAP", { kind: "inbox" })).toBe("https://pc.example.com/PAP/inbox");
+  });
+});

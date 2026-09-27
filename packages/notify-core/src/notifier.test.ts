@@ -12,6 +12,7 @@ import { createNotifier } from "./notifier.js";
 import type { Notification, NotificationSender, SenderDeps, SendResult } from "./types.js";
 
 const COMPANY = "test-company";
+const clock = { now: Date.parse("2026-09-27T12:00:00Z") };
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "notify-core-test",
@@ -32,8 +33,11 @@ const manifest: PaperclipPluginManifestV1 = {
     "http.outbound",
     "secrets.read-ref",
     "metrics.write",
+    "jobs.schedule",
+    "activity.log.write",
   ],
   entrypoints: { worker: "./dist/worker.js" },
+  jobs: [{ jobKey: "delivery-drain", displayName: "Delivery drain", schedule: "*/1 * * * *" }],
 };
 
 interface FakeConfig extends BaseConfig {
@@ -77,8 +81,18 @@ async function setup(config: Record<string, unknown>, sender = fakeSender()) {
       } as unknown as Issue,
     ],
   });
-  const notifier = createNotifier({ sender: sender.sender, parseConfig: parseFake });
+  const notifier = createNotifier({
+    sender: sender.sender,
+    parseConfig: parseFake,
+    clock: () => clock.now,
+  });
   await notifier.setup(harness.ctx);
+  // Event handlers return before delivery finishes; wait for it in tests.
+  const emit = harness.emit.bind(harness);
+  harness.emit = async (...args: Parameters<TestHarness["emit"]>) => {
+    await emit(...args);
+    await notifier.idle();
+  };
   return { harness, notifier, ...sender };
 }
 
@@ -95,6 +109,7 @@ const metricNames = (harness: TestHarness) => harness.metrics.map((m) => m.name)
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  clock.now = Date.parse("2026-09-27T12:00:00Z");
 });
 
 describe("createNotifier", () => {
@@ -231,12 +246,7 @@ describe("createNotifier", () => {
       }),
     );
     await harness.emit(...runFailed());
-    expect(harness.logs).toContainEqual(
-      expect.objectContaining({
-        message: "notify.failed",
-        meta: expect.objectContaining({ retryable: true }),
-      }),
-    );
+    expect(harness.logs).toContainEqual(expect.objectContaining({ message: "notify.retry" }));
   });
 
   it("uses the host fetch by default", async () => {
@@ -387,5 +397,95 @@ describe("validateConfig", () => {
       ok: false,
       errors: [expect.stringMatching(/minSeverity/)],
     });
+  });
+});
+
+describe("delivery pipeline", () => {
+  const MIN = 60_000;
+  const drain = (harness: TestHarness) => harness.runJob("delivery-drain");
+
+  it("returns from the event handler before delivery finishes", async () => {
+    let release: (value: SendResult) => void = () => {};
+    const slow = fakeSender(() => new Promise<SendResult>((resolve) => (release = resolve)));
+    const harness = createTestHarness({ manifest, config: CONFIGURED });
+    harness.seed({ companies: [{ id: COMPANY, issuePrefix: "PAP" } as unknown as Company] });
+    const notifier = createNotifier({ sender: slow.sender, parseConfig: parseFake });
+    await notifier.setup(harness.ctx);
+
+    await harness.emit(...runFailed());
+    expect(slow.sent).toHaveLength(0);
+    await vi.waitFor(() => expect(slow.sent).toHaveLength(1));
+    release({ ok: true });
+    await notifier.idle();
+    expect(metricNames(harness)).toContain("notify.sent");
+  });
+
+  it("retries through the drain job until the server is back (criterion 7)", async () => {
+    const results: SendResult[] = [{ ok: false, retryable: true, error: "HTTP 503" }];
+    const { harness, notifier, sent } = await setup(
+      CONFIGURED,
+      fakeSender(async () => results.shift() ?? { ok: true }),
+    );
+    await harness.emit(...runFailed());
+    expect(metricNames(harness)).toContain("notify.retry");
+    expect((await notifier.health()).status).toBe("degraded");
+
+    clock.now += 31_000;
+    await drain(harness);
+    expect(sent).toHaveLength(2);
+    expect(metricNames(harness)).toContain("notify.sent");
+    const status = await harness.getData<{ lastSentAt?: string }>("status", { companyId: COMPANY });
+    expect(status.lastSentAt).toBe(new Date(clock.now).toISOString());
+
+    clock.now += 6 * MIN;
+    expect((await notifier.health()).status).toBe("ok");
+  });
+
+  it("drops after maxAgeMinutes into the activity log", async () => {
+    const { harness } = await setup(
+      { ...CONFIGURED, retry: { maxAgeMinutes: 1 } },
+      fakeSender({ ok: false, retryable: true, error: "HTTP 503" }),
+    );
+    await harness.emit(...runFailed());
+    clock.now += 2 * MIN;
+    await drain(harness);
+    expect(harness.metrics).toContainEqual(
+      expect.objectContaining({
+        name: "notify.dropped",
+        tags: expect.objectContaining({ reason: "expired" }),
+      }),
+    );
+    expect(harness.activity).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("CTO failed") }),
+    );
+  });
+
+  it("holds events in quiet hours and sends one digest when they end (criterion 6)", async () => {
+    const quiet = { ...CONFIGURED, quietHours: { enabled: true, start: "11:00", end: "13:00" } };
+    const { harness, sent } = await setup(quiet);
+    await harness.emit(...runFailed({ eventId: "e1" }));
+    await harness.emit(...runFailed({ eventId: "e2", entityId: "run-2" }));
+    expect(sent).toHaveLength(0);
+    expect(harness.metrics.filter((m) => m.name === "notify.queued")).toHaveLength(2);
+
+    clock.now = Date.parse("2026-09-27T13:00:00Z");
+    await drain(harness);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.n).toMatchObject({
+      title: "2 notifications since 12:00",
+      url: "https://pc.example.com/PAP/inbox",
+    });
+    expect(harness.metrics).toContainEqual(
+      expect.objectContaining({ name: "notify.digested", value: 2 }),
+    );
+  });
+
+  it("reports health and clears warnings on config change", async () => {
+    const { harness, notifier } = await setup({ minSeverity: "loud" });
+    await harness.emit(...runFailed());
+    notifier.configChanged(COMPANY);
+    await harness.emit(...runFailed({ eventId: "e-2", entityId: "run-2" }));
+    expect(harness.logs.filter((l) => l.message === "notify.invalid_config")).toHaveLength(2);
+    expect(await notifier.health()).toEqual({ status: "ok" });
   });
 });
