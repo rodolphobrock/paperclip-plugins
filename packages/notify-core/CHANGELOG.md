@@ -1,0 +1,1 @@
+# @rodolphobrock/paperclip-notify-core

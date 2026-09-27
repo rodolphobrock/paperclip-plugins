@@ -30,6 +30,12 @@ importers:
         specifier: ^5.0.2
         version: 5.0.2(@types/node@24.19.0)(@vitest/coverage-v8@5.0.2)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2))
 
+  packages/notify-core:
+    devDependencies:
+      '@paperclipai/plugin-sdk':
+        specifier: 2026.916.1
+        version: 2026.916.1
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':
@@ -360,6 +366,20 @@ packages:
 
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
+
+  '@paperclipai/plugin-sdk@2026.916.1':
+    resolution: {integrity: sha512-Q5phElelSaOeMGvEg00mvEej8yFPU8PJv9UZRgelteuwCuEq5k5c5Ze36zsT6nXubbgF24opbFh2mFb0+qMs6Q==}
+    engines: {node: '>=24.11.0'}
+    hasBin: true
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
+
+  '@paperclipai/shared@2026.916.1':
+    resolution: {integrity: sha512-SrAuGkqt0hpuTJ82J0Hk6tYao/7I7djp3wzYaYT7rej3se9PnZ5cKT8HI5/du9TM0RLO7+fElhdVG7IDyGuIZg==}
+    engines: {node: '>=24.11.0'}
 
   '@rolldown/binding-android-arm-eabi@1.2.11':
     resolution: {integrity: sha512-A5kXfGKvKWWZE0TtPrfsvT+q4Y5d1QG8gGUzpYjGydM+fARM9MuX90PrXYXe0XbsDVgyxxNzHo6giCj90bsFNw==}
@@ -1047,6 +1067,9 @@ packages:
     engines: {node: '>=20.11'}
     hasBin: true
 
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+
 snapshots:
 
   '@babel/helper-string-parser@7.29.7': {}
@@ -1367,6 +1390,15 @@ snapshots:
       fastq: 1.20.3
 
   '@oxc-project/types@0.151.0': {}
+
+  '@paperclipai/plugin-sdk@2026.916.1':
+    dependencies:
+      '@paperclipai/shared': 2026.916.1
+      zod: 4.6.5
+
+  '@paperclipai/shared@2026.916.1':
+    dependencies:
+      zod: 4.6.5
 
   '@rolldown/binding-android-arm-eabi@1.2.11':
     optional: true
@@ -1900,3 +1932,5 @@ snapshots:
       isexe: 2.0.0
 
   why-is-node-running@3.2.2: {}
+
+  zod@4.6.5: {}
