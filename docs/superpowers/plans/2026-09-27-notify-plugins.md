@@ -112,7 +112,7 @@ Resultado: `pnpm install && pnpm lint && pnpm typecheck && pnpm test && pnpm bui
 - Consome: `SEVERITIES` do core (prova que o workspace resolve e que o esbuild empacota o core).
 - Produz: manifest `PaperclipPluginManifestV1` com `id: "paperclip-plugin-<nome>"`, `categories: ["connector"]`, `capabilities: ["events.subscribe"]`, `entrypoints.worker: "./dist/worker.js"`; worker `definePlugin({ setup, onHealth })` com `runWorker(plugin, import.meta.url)`. `package.json` com `paperclipPlugin: { manifest: "./dist/manifest.js", worker: "./dist/worker.js" }`.
 
-- [ ] **Passo 1:** escrever `tests/plugin.spec.ts`: manifest tem ID e `minimumHostVersion` corretos; `createTestHarness({ manifest })` + `plugin.definition.setup(harness.ctx)` não lança; `onHealth()` devolve `status: "ok"` e cita as severidades conhecidas.
+- [ ] **Passo 1:** escrever `tests/plugin.spec.ts`: manifest tem ID e versão iguais aos do `package.json` e não declara `minimumHostVersion`; `createTestHarness({ manifest })` + `plugin.definition.setup(harness.ctx)` não lança; `onHealth()` devolve `status: "ok"` e cita as severidades conhecidas.
 - [ ] **Passo 2:** rodar o teste. Esperado: falha, módulos inexistentes.
 - [ ] **Passo 3:** implementar `manifest.ts`, `worker.ts`, `esbuild.config.mjs` (presets do SDK, sem UI por enquanto).
 - [ ] **Passo 4:** `pnpm test && pnpm typecheck && pnpm build` na raiz. Esperado: `dist/manifest.js` e `dist/worker.js` em cada plugin.
