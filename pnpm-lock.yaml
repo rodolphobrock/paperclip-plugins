@@ -36,6 +36,24 @@ importers:
         specifier: 2026.916.1
         version: 2026.916.1
 
+  packages/plugin-apprise:
+    devDependencies:
+      '@paperclipai/plugin-sdk':
+        specifier: 2026.916.1
+        version: 2026.916.1
+      '@rodolphobrock/paperclip-notify-core':
+        specifier: workspace:*
+        version: link:../notify-core
+
+  packages/plugin-ntfy:
+    devDependencies:
+      '@paperclipai/plugin-sdk':
+        specifier: 2026.916.1
+        version: 2026.916.1
+      '@rodolphobrock/paperclip-notify-core':
+        specifier: workspace:*
+        version: link:../notify-core
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':
