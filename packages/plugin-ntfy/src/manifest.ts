@@ -21,11 +21,24 @@ const manifest: PaperclipPluginManifestV1 = {
     "agents.read",
     "issues.read",
     "metrics.write",
+    "instance.settings.register",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
+    ui: "./dist/ui",
   },
   instanceConfigSchema: ntfyConfigSchema,
+  ui: {
+    slots: [
+      {
+        type: "companySettingsPage",
+        id: "ntfy-settings",
+        displayName: "ntfy",
+        exportName: "NtfySettingsPage",
+        routePath: "ntfy",
+      },
+    ],
+  },
 };
 
 export default manifest;

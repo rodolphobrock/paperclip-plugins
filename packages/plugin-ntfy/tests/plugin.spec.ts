@@ -32,6 +32,7 @@ describe("paperclip-plugin-ntfy manifest", () => {
         "http.outbound",
         "issues.read",
         "metrics.write",
+        "instance.settings.register",
         "plugin.state.read",
         "plugin.state.write",
         "secrets.read-ref",
