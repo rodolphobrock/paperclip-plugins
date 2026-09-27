@@ -1,4 +1,5 @@
-import type { SendResult } from "./types.js";
+import { redact } from "./redact.js";
+import { SecretResolutionError, type SendResult } from "./types.js";
 
 const BODY_EXCERPT_CHARS = 200;
 
@@ -20,7 +21,8 @@ export async function classifyResponse(
   if (res.ok) return { ok: true };
 
   const retryable = res.status === 429 || res.status >= 500;
-  const excerpt = (await res.text().catch(() => "")).slice(0, BODY_EXCERPT_CHARS).trim();
+  const body = await res.text().catch(() => "");
+  const excerpt = redact(body.slice(0, BODY_EXCERPT_CHARS).trim());
   const error = `HTTP ${res.status}${excerpt ? `: ${excerpt}` : ""}`;
   if (!retryable) return { ok: false, retryable: false, error };
 
@@ -30,11 +32,14 @@ export async function classifyResponse(
     : { ok: false, retryable: true, error, retryAfterMs };
 }
 
-/** Network errors, timeouts and anything unexpected are retryable. */
+/** Network errors, timeouts and anything unexpected are retryable; secret failures are not. */
 export function classifyError(err: unknown): SendResult {
+  if (err instanceof SecretResolutionError) {
+    return { ok: false, retryable: false, error: err.message };
+  }
   if (err instanceof Error) {
     const kind = err.name === "TimeoutError" || err.name === "AbortError" ? "timeout" : "network";
-    return { ok: false, retryable: true, error: `${kind} error: ${err.message}` };
+    return { ok: false, retryable: true, error: `${kind} error: ${redact(err.message)}` };
   }
-  return { ok: false, retryable: true, error: `unexpected error: ${String(err)}` };
+  return { ok: false, retryable: true, error: `unexpected error: ${redact(String(err))}` };
 }

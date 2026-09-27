@@ -12,6 +12,7 @@ export { classifyError, classifyResponse, parseRetryAfter } from "./http-result.
 export { buildDeepLink } from "./links.js";
 export { type EventFacts, mapEvent, type NotificationDraft } from "./mappers.js";
 export { createNotifier, type Notifier, type NotifierOptions } from "./notifier.js";
+export { redact } from "./redact.js";
 export {
   compareSeverity,
   isSeverity,
@@ -29,3 +30,4 @@ export type {
   SenderDeps,
   SendResult,
 } from "./types.js";
+export { SecretResolutionError } from "./types.js";

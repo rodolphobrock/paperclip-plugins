@@ -13,15 +13,20 @@ export function applyPolicy(draft: NotificationDraft, config: BaseConfig): Polic
   if (compareSeverity(rule.severity, config.minSeverity) < 0)
     return { pass: false, reason: "severity" };
 
-  // Inclusion lists: when a list is set, an event whose agent/project is unknown does not pass.
-  if (!included(config.filters.agentIds, draft.scope.agentId))
+  if (excluded(config.filters.agentIds, draft.scope.agentId)) {
     return { pass: false, reason: "filter" };
-  if (!included(config.filters.projectIds, draft.scope.projectId))
+  }
+  if (excluded(config.filters.projectIds, draft.scope.projectId)) {
     return { pass: false, reason: "filter" };
+  }
 
   return { pass: true, severity: rule.severity };
 }
 
-function included(list: string[], value: string | undefined): boolean {
-  return list.length === 0 || (value !== undefined && list.includes(value));
+/**
+ * Inclusion lists only apply to events that have that dimension: a company-wide budget
+ * incident or a board decision has no agent, and must not be silenced by an agent filter.
+ */
+function excluded(list: string[], value: string | undefined): boolean {
+  return list.length > 0 && value !== undefined && !list.includes(value);
 }

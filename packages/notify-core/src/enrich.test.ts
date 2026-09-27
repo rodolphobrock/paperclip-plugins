@@ -112,3 +112,22 @@ describe("collectFacts", () => {
     );
   });
 });
+
+describe("collectFacts for filters", () => {
+  it("loads the run issue when filters need it", async () => {
+    const p = ports();
+    const payload = { agentId: "ag-1", issueId: "is-3" };
+    const facts = await collectFacts(event("agent.run.failed", payload), p, logger(), true);
+    expect(p.getIssue).toHaveBeenCalledWith("is-3", "co-1");
+    expect(facts.issue?.projectId).toBe("pr-1");
+    const q = ports();
+    await collectFacts(event("agent.run.failed", payload), q, logger(), false);
+    expect(q.getIssue).not.toHaveBeenCalled();
+  });
+
+  it("does not look up the approval for approval.created", async () => {
+    const p = ports();
+    await collectFacts(event("approval.created", {}, "ap-1"), p, logger(), false);
+    expect(p.getApproval).not.toHaveBeenCalled();
+  });
+});

@@ -1,6 +1,7 @@
 import type { PluginEvent, PluginEventType } from "@paperclipai/plugin-sdk";
 import { DEFAULT_RULES, type RuleKey } from "./catalog.js";
 import { isRecord, readNumber, readString } from "./guards.js";
+import { redact } from "./redact.js";
 import type { Severity, Tone } from "./severity.js";
 import type { LinkTarget } from "./types.js";
 
@@ -50,25 +51,53 @@ export function mapEvent(event: PluginEvent, facts: EventFacts): NotificationDra
   const input = mapByType(event, payload, facts);
   if (input === null) return null;
 
-  const scope: NotificationDraft["scope"] = {};
-  const agentId = readString(payload, "agentId");
-  const projectId = readString(payload, "projectId") ?? facts.issue?.projectId ?? undefined;
-  if (agentId !== undefined) scope.agentId = agentId;
-  if (projectId !== undefined) scope.projectId = projectId;
-
   const draft: NotificationDraft = {
     rule: input.rule,
     eventType: event.eventType as PluginEventType,
     severity: DEFAULT_RULES[input.rule].severity,
     tone: input.tone,
     title: truncate(input.title, TITLE_MAX),
-    body: (input.body ?? []).filter((line): line is string => Boolean(line)).join("\n"),
+    body: (input.body ?? [])
+      .filter((line): line is string => Boolean(line))
+      .map((line) => truncate(line, DETAIL_MAX))
+      .join("\n"),
     tags: input.tags,
     factKey: input.factKey,
-    scope,
+    scope: scopeOf(event, payload, facts),
   };
   if (input.link !== undefined) draft.link = input.link;
   return draft;
+}
+
+/**
+ * The agent and project the fact is about, for the inclusion filters. The payload's
+ * `agentId` is the agent that acted, which is only the right answer for runs.
+ */
+function scopeOf(
+  event: PluginEvent,
+  payload: Record<string, unknown>,
+  facts: EventFacts,
+): NotificationDraft["scope"] {
+  let agentId: string | undefined;
+  let projectId = readString(payload, "projectId") ?? facts.issue?.projectId ?? undefined;
+
+  if (event.eventType.startsWith("agent.run.")) {
+    agentId = readString(payload, "agentId");
+  } else if (event.eventType.startsWith("approval.")) {
+    agentId = readString(payload, "requestedByAgentId") ?? readString(payload, "agentId");
+  } else if (event.eventType.startsWith("issue.")) {
+    agentId = facts.issue?.assigneeAgentId ?? undefined;
+  } else if (event.eventType.startsWith("budget.")) {
+    const scopeType = readString(payload, "scopeType");
+    const scopeId = readString(payload, "scopeId");
+    if (scopeType === "agent") agentId = scopeId;
+    if (scopeType === "project") projectId = scopeId;
+  }
+
+  const scope: NotificationDraft["scope"] = {};
+  if (agentId !== undefined) scope.agentId = agentId;
+  if (projectId !== undefined) scope.projectId = projectId;
+  return scope;
 }
 
 function mapByType(
@@ -184,7 +213,8 @@ function agentRun(
     tone: "failure",
     title: timedOut ? `${agent} timed out` : `${agent} failed`,
     body: [
-      error !== undefined ? truncate(error, DETAIL_MAX) : undefined,
+      // Adapter output skips the host's redaction and may echo credentials.
+      error !== undefined ? redact(error) : undefined,
       errorCode && `Code: ${errorCode}`,
     ],
     tags,
@@ -242,11 +272,9 @@ function issueLink(identifier: string | undefined): LinkTarget | undefined {
 }
 
 function issueUpdated(payload: Record<string, unknown>, facts: EventFacts): DraftInput | null {
-  // Emitters disagree on the shape: status + _previous.status, status + previousStatus,
-  // patch.status + _previous.status, or status alone.
-  const status = readString(payload, "status") ?? readString(payload.patch, "status");
-  const previous = readString(payload._previous, "status") ?? readString(payload, "previousStatus");
-  if (status === undefined || status === previous) return null;
+  const change = statusChange(payload);
+  if (change === null) return null;
+  const { status } = change;
   if (status !== "blocked" && status !== "done") return null;
 
   const identifier = issueIdentifier(payload, facts);
@@ -260,6 +288,28 @@ function issueUpdated(payload: Record<string, unknown>, facts: EventFacts): Draf
     link: issueLink(identifier),
     factKey: status,
   };
+}
+
+/**
+ * Emitters disagree on the shape: `changes.status.{from,to}`; `status` + `_previous.status`
+ * (main PATCH route, where `status` is the requested value and `changes`/`_previous` list only
+ * fields that really changed); `status` + `previousStatus`; `patch.status` + `_previous.status`;
+ * or `status` alone. Returns null when the status did not change.
+ */
+function statusChange(payload: Record<string, unknown>): { status: string } | null {
+  const { changes, _previous: previousFields, patch } = payload;
+  if (isRecord(changes) && isRecord(changes.status)) {
+    const to = readString(changes.status, "to");
+    return to !== undefined && to !== readString(changes.status, "from") ? { status: to } : null;
+  }
+
+  const status = readString(payload, "status") ?? readString(patch, "status");
+  const previous = readString(previousFields, "status") ?? readString(payload, "previousStatus");
+  if (status === undefined || status === previous) return null;
+
+  const listsRealChanges = isRecord(changes) || (isRecord(previousFields) && !isRecord(patch));
+  if (previous === undefined && listsRealChanges) return null;
+  return { status };
 }
 
 function issueCreated(payload: Record<string, unknown>, facts: EventFacts): DraftInput {

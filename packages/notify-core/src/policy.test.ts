@@ -67,8 +67,8 @@ describe("applyPolicy", () => {
       });
     });
 
-    it("blocks an unknown agent while the filter is on", () => {
-      expect(applyPolicy(draft({ scope: {} }), config)).toEqual({ pass: false, reason: "filter" });
+    it("passes events without an agent while the filter is on", () => {
+      expect(applyPolicy(draft({ scope: {} }), config).pass).toBe(true);
     });
   });
 
@@ -79,9 +79,18 @@ describe("applyPolicy", () => {
       expect(applyPolicy(draft(), config).pass).toBe(true);
     });
 
-    it("blocks an unlisted or unknown project", () => {
+    it("blocks an unlisted project and passes events without one", () => {
       expect(applyPolicy(draft({ scope: { projectId: "pr-2" } }), config).pass).toBe(false);
-      expect(applyPolicy(draft({ scope: { agentId: "ag-1" } }), config).pass).toBe(false);
+      expect(applyPolicy(draft({ scope: { agentId: "ag-1" } }), config).pass).toBe(true);
     });
+  });
+});
+
+describe("filters on events without that dimension", () => {
+  it("passes when the agent or project is unknown", () => {
+    const config = parseBaseConfig({ filters: { agentIds: ["ag-1"], projectIds: ["pr-1"] } });
+    expect(applyPolicy(draft({ scope: {} }), config).pass).toBe(true);
+    expect(applyPolicy(draft({ scope: { agentId: "ag-1" } }), config).pass).toBe(true);
+    expect(applyPolicy(draft({ scope: { agentId: "ag-2" } }), config).pass).toBe(false);
   });
 });

@@ -31,6 +31,20 @@ export type SendResult =
   | { ok: true }
   | { ok: false; retryable: boolean; error: string; retryAfterMs?: number };
 
+/**
+ * A secret could not be resolved (deleted reference, host rate limit). Not retryable,
+ * and the message never carries the underlying cause, which may echo secret material.
+ */
+export class SecretResolutionError extends Error {
+  readonly configPath: string;
+
+  constructor(configPath: string, cause?: unknown) {
+    super(`secret resolution failed (${configPath})`, { cause });
+    this.name = "SecretResolutionError";
+    this.configPath = configPath;
+  }
+}
+
 /** The subset of `fetch` both `ctx.http.fetch` and the global fetch provide. */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 

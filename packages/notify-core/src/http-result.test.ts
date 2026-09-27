@@ -73,3 +73,25 @@ describe("classifyError", () => {
     expect(result.ok || result.error.length).toBeGreaterThan(0);
   });
 });
+
+describe("classifyError review fixes", () => {
+  it("treats secret resolution failures as permanent and hides the cause", async () => {
+    const { SecretResolutionError } = await import("./types.js");
+    const result = classifyError(
+      new SecretResolutionError("auth.token", new Error("secret sk-live-xyz gone")),
+    );
+    expect(result).toEqual({
+      ok: false,
+      retryable: false,
+      error: "secret resolution failed (auth.token)",
+    });
+  });
+
+  it("redacts credentials from error messages and response bodies", async () => {
+    const result = classifyError(new TypeError("Failed to parse URL from https://u:pw@h/x"));
+    expect(result.ok || result.error).not.toContain("pw@");
+    const res = new Response("bad token=abc123", { status: 400 });
+    const classified = await classifyResponse(res, NOW);
+    expect(classified.ok || classified.error).not.toContain("abc123");
+  });
+});

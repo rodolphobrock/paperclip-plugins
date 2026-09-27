@@ -8,12 +8,13 @@ import { classifyError } from "./http-result.js";
 import { buildDeepLink, PrefixCache } from "./links.js";
 import { mapEvent } from "./mappers.js";
 import { applyPolicy } from "./policy.js";
-import type {
-  FetchLike,
-  Notification,
-  NotificationSender,
-  SecretRef,
-  SenderDeps,
+import {
+  type FetchLike,
+  type Notification,
+  type NotificationSender,
+  type SecretRef,
+  SecretResolutionError,
+  type SenderDeps,
 } from "./types.js";
 
 const PRIVATE_FETCH_TIMEOUT_MS = 10_000;
@@ -79,12 +80,9 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         const config = await loadConfig(companyId);
         if (config === null) return;
 
-        const facts = await collectFacts(
-          event,
-          ports,
-          ctx.logger,
-          config.filters.projectIds.length > 0,
-        );
+        const { agentIds, projectIds } = config.filters;
+        const needsIssue = agentIds.length > 0 || projectIds.length > 0;
+        const facts = await collectFacts(event, ports, ctx.logger, needsIssue);
         const draft = mapEvent(event, facts);
         if (draft === null) return;
 
@@ -168,9 +166,14 @@ export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): 
         const cached = secrets.get(cacheKey);
         const now = clock();
         if (cached !== undefined && now - cached.at < SECRET_TTL_MS) return cached.value;
-        const value = await ctx.secrets.resolve(ref, { companyId, configPath });
-        secrets.set(cacheKey, { value, at: now });
-        return value;
+        try {
+          const value = await ctx.secrets.resolve(ref, { companyId, configPath });
+          secrets.set(cacheKey, { value, at: now });
+          return value;
+        } catch (error) {
+          // Deleted refs and the host's 30 reads/min limit are not fixed by retrying soon.
+          throw new SecretResolutionError(configPath, error);
+        }
       };
 
       // Serialized per company so concurrent deliveries cannot race on the dedupe ring.

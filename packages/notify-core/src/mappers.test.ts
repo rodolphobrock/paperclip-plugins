@@ -320,3 +320,78 @@ describe("robustness", () => {
     expect(draft?.title.endsWith("…")).toBe(true);
   });
 });
+
+describe("review fixes", () => {
+  it("ignores a requested status that did not change (main PATCH route)", () => {
+    const payload = { status: "blocked", _previous: { description: "old" }, identifier: "PAP-7" };
+    expect(mapEvent(event("issue.updated", payload), none)).toBeNull();
+    const withChanges = { status: "blocked", changes: { description: { from: "a", to: "b" } } };
+    expect(mapEvent(event("issue.updated", withChanges), none)).toBeNull();
+  });
+
+  it("reads the status change from changes", () => {
+    const payload = { changes: { status: { from: "todo", to: "blocked" } }, identifier: "PAP-7" };
+    expect(mapEvent(event("issue.updated", payload), none)?.rule).toBe("issue.updated.blocked");
+  });
+
+  it("redacts secrets from run errors", () => {
+    const payload = {
+      agentId: "a",
+      runId: "r",
+      error: "POST https://u:pw@h/x token=abc123 failed",
+    };
+    const draft = mapEvent(event("agent.run.failed", payload), none);
+    expect(draft?.body).not.toContain("pw@");
+    expect(draft?.body).not.toContain("abc123");
+  });
+
+  it("caps comment snippets and titles in the body", () => {
+    const payload = { commentId: "c", bodySnippet: "y".repeat(1000), issueTitle: "t".repeat(1000) };
+    const draft = mapEvent(event("issue.comment.created", payload, { actorType: "user" }), none);
+    for (const line of draft?.body.split("\n") ?? []) expect(line.length).toBeLessThanOrEqual(300);
+  });
+
+  describe("scope", () => {
+    it("uses the issue assignee, not the acting agent, for issue events", () => {
+      const facts: EventFacts = {
+        issue: { assigneeAgentId: "ag-owner", projectId: "pr-1", identifier: "PAP-1", title: "x" },
+      };
+      const draft = mapEvent(
+        event("issue.updated", { status: "blocked", agentId: "ag-actor" }),
+        facts,
+      );
+      expect(draft?.scope).toEqual({ agentId: "ag-owner", projectId: "pr-1" });
+    });
+
+    it("uses the requester for approvals", () => {
+      const draft = mapEvent(event("approval.decided", { requestedByAgentId: "ag-req" }), none);
+      expect(draft?.scope.agentId).toBe("ag-req");
+    });
+
+    it("uses the budget scope", () => {
+      const agentScope = { scopeType: "agent", scopeId: "ag-9" };
+      expect(mapEvent(event("budget.incident.opened", agentScope), none)?.scope).toEqual({
+        agentId: "ag-9",
+      });
+      const projectScope = { scopeType: "project", scopeId: "pr-9" };
+      expect(mapEvent(event("budget.incident.resolved", projectScope), none)?.scope).toEqual({
+        projectId: "pr-9",
+      });
+      expect(
+        mapEvent(event("budget.incident.opened", { scopeType: "company", scopeId: "co" }), none)
+          ?.scope,
+      ).toEqual({});
+    });
+
+    it("uses the run agent and the run issue project", () => {
+      const facts: EventFacts = {
+        issue: { assigneeAgentId: "x", projectId: "pr-3", identifier: "PAP-3", title: "x" },
+      };
+      const draft = mapEvent(
+        event("agent.run.failed", { agentId: "ag-1", issueId: "is-3" }),
+        facts,
+      );
+      expect(draft?.scope).toEqual({ agentId: "ag-1", projectId: "pr-3" });
+    });
+  });
+});

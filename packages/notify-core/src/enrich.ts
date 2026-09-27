@@ -35,7 +35,8 @@ export async function collectFacts(
     }
   };
 
-  if (eventType.startsWith("approval.") && entityId) {
+  // The decision is not in the payload; only the approval record has it.
+  if (eventType === "approval.decided" && entityId) {
     const approval = await lookup("approval", () => ports.getApproval(entityId, companyId));
     if (approval !== undefined) facts.approval = approval;
   }
@@ -46,12 +47,21 @@ export async function collectFacts(
     if (name !== undefined) facts.agentName = name;
   }
 
-  const wantsIssue =
-    eventType === "issue.comment.created" || (needsIssue && eventType.startsWith("issue."));
-  if (wantsIssue && entityId) {
-    const issue = await lookup("issue", () => ports.getIssue(entityId, companyId));
+  const issueId = issueIdFor(event, needsIssue);
+  if (issueId !== undefined) {
+    const issue = await lookup("issue", () => ports.getIssue(issueId, companyId));
     if (issue !== undefined) facts.issue = issue;
   }
 
   return facts;
+}
+
+/** Comments always need the issue (assignee check); other events only for the filters. */
+function issueIdFor(event: PluginEvent, needsIssue: boolean): string | undefined {
+  const { eventType, entityId } = event;
+  if (eventType === "issue.comment.created") return entityId || undefined;
+  if (!needsIssue) return undefined;
+  if (eventType.startsWith("issue.")) return entityId || undefined;
+  if (eventType.startsWith("agent.run.")) return readString(event.payload, "issueId");
+  return undefined;
 }

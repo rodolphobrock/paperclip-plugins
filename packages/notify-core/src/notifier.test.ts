@@ -276,3 +276,33 @@ describe("createNotifier", () => {
     expect(resolve).toHaveBeenCalledWith(ref, { companyId: COMPANY, configPath: "token" });
   });
 });
+
+describe("createNotifier review fixes", () => {
+  it("wraps secret failures so they are not retried", async () => {
+    const { harness, sent } = await setup(CONFIGURED);
+    vi.spyOn(harness.ctx.secrets, "resolve").mockRejectedValue(new Error("rate limited: sk-abc"));
+    await harness.emit(...runFailed());
+    const ref = { type: "secret_ref", secretId: "sec-1" } as const;
+    const attempt = sent[0]?.deps.resolveSecret(ref, "auth.token");
+    await expect(attempt).rejects.toMatchObject({
+      name: "SecretResolutionError",
+      configPath: "auth.token",
+    });
+  });
+
+  it("keeps budget alerts when an agent filter is set", async () => {
+    const { harness, sent } = await setup({ ...CONFIGURED, filters: { agentIds: ["ag-1"] } });
+    await harness.emit(
+      "budget.incident.opened",
+      {
+        scopeType: "company",
+        scopeId: COMPANY,
+        amountObserved: 1,
+        amountLimit: 1,
+        approvalId: null,
+      },
+      { entityId: "inc-1" },
+    );
+    expect(sent).toHaveLength(1);
+  });
+});
