@@ -22,22 +22,39 @@ jobs:
 
       - uses: pnpm/action-setup@v4
 
+      # npm's trusted publishing guide: registry-url set, no dependency cache in release builds.
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Trusted publishing (OIDC) needs npm CLI 11.5.1 or later.
+      - run: npm install -g npm@^11.5.1
 
       - run: pnpm install --frozen-lockfile
 
-      # Opens the "Version packages" PR while changesets are pending; publishes once it is merged.
-      # Publishing uses npm trusted publishing (OIDC), so no NPM_TOKEN is stored.
+      # Publish only what passes the same checks as CI.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+      # Opens or updates the "Version packages" PR while changesets are pending. It is not given a
+      # publish command, so it never writes an .npmrc with a token.
       - uses: changesets/action@v1
+        id: changesets
         with:
           version: pnpm version-packages
-          publish: pnpm release
           commit: "chore: version packages"
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
+
+      # After the version PR is merged: publish with npm trusted publishing (OIDC, automatic
+      # provenance, no NPM_TOKEN) and push the release tags. Private packages are skipped.
+      - name: Publish
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          pnpm exec changeset publish
+          git push origin --tags

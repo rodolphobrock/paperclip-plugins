@@ -413,7 +413,7 @@ Erros do Apprise nunca incluem o corpo da resposta (pode ecoar URLs com credenci
 
 ### Fase 7 — Documentação e release
 
-READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, configurar trusted publishing no npm para cada pacote, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
+READMEs dos plugins e do core (instalação, configuração, risco de `allowPrivateNetwork`, eventos perdidos em reinício), remover `"private": true` dos plugins (o core continua privado), conferir se os nomes seguem livres no npm, publicar a primeira versão de cada plugin com um token granular temporário (o npm só aceita trusted publisher em pacote que já existe), configurar o trusted publisher (repositório `rodolphobrock/paperclip-plugins`, workflow `release.yml`) e revogar o token, primeira changeset, job de compatibilidade do CI contra `@paperclipai/plugin-sdk@latest` e `@beta`, PR no awesome-paperclip, comentários na #26, #2897 e #3257.
 
 ## Desvios da spec
 
