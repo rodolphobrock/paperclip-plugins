@@ -306,3 +306,86 @@ describe("createNotifier review fixes", () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+describe("send-test action and status data", () => {
+  it("sends a test with the company secrets and records status", async () => {
+    const { harness, sender } = await setup(CONFIGURED);
+    const sendTest = vi.spyOn(sender, "sendTest");
+    const result = await harness.performAction("send-test", {}, { companyId: COMPANY });
+    expect(result).toEqual({ ok: true });
+    expect(sendTest).toHaveBeenCalledTimes(1);
+
+    const status = await harness.getData<Record<string, unknown>>("status", { companyId: COMPANY });
+    expect(status).toMatchObject({
+      configured: true,
+      enabled: true,
+      lastSentAt: expect.any(String),
+    });
+    expect(status).not.toHaveProperty("lastError");
+  });
+
+  it("works even when notifications are disabled", async () => {
+    const { harness } = await setup({ ...CONFIGURED, enabled: false });
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("reports an unconfigured company", async () => {
+    const { harness } = await setup({});
+    expect(await harness.performAction("send-test", {}, { companyId: COMPANY })).toEqual({
+      ok: false,
+      error: "Not configured for this company",
+    });
+    expect(await harness.getData("status", { companyId: COMPANY })).toEqual({
+      configured: false,
+      enabled: false,
+    });
+  });
+
+  it("reports invalid config", async () => {
+    const { harness } = await setup({ minSeverity: "loud" });
+    const result = await harness.performAction<{ ok: boolean; error: string }>(
+      "send-test",
+      {},
+      { companyId: COMPANY },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/minSeverity/);
+  });
+
+  it("requires a company", async () => {
+    const { harness } = await setup(CONFIGURED);
+    expect(await harness.performAction("send-test", {})).toEqual({
+      ok: false,
+      error: "Missing company",
+    });
+    expect(await harness.getData("status", {})).toEqual({ configured: false, enabled: false });
+  });
+
+  it("records the last error without secrets", async () => {
+    const failing = fakeSender({ ok: false, retryable: false, error: "HTTP 401: token=abc123" });
+    const { harness } = await setup(CONFIGURED, failing);
+    failing.sender.sendTest = async () => ({ ok: false, retryable: false, error: "HTTP 401" });
+    await harness.emit(...runFailed());
+    const status = await harness.getData<{ lastError?: { message: string } }>("status", {
+      companyId: COMPANY,
+    });
+    expect(status.lastError?.message).toContain("HTTP 401");
+    expect(status.lastError?.message).not.toContain("abc123");
+
+    const result = await harness.performAction("send-test", {}, { companyId: COMPANY });
+    expect(result).toEqual({ ok: false, error: "HTTP 401" });
+  });
+});
+
+describe("validateConfig", () => {
+  it("reports parse problems for onValidateConfig", async () => {
+    const { validateConfig } = await import("./notifier.js");
+    expect(await validateConfig(parseFake, CONFIGURED)).toEqual({ ok: true });
+    expect(await validateConfig(parseFake, { minSeverity: "loud" })).toEqual({
+      ok: false,
+      errors: [expect.stringMatching(/minSeverity/)],
+    });
+  });
+});
