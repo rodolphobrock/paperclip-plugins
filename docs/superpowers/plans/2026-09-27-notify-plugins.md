@@ -333,7 +333,52 @@ A tarefa 3.3 original (seleção de `fetch`) já foi feita na fase 2.
 
 ### Fase 4 — Core v0.2: entrega
 
-Tarefas: `quiet-hours.ts` (`isQuiet(now, cfg)`, relógio injetado, cruzamento de meia-noite, fuso IANA validado), `rate-limit.ts` (token bucket por empresa), `digest.ts` (fila e mensagem "N eventos desde HH:MM", 10 linhas), `retry.ts` (backoff 30 s × 2ⁿ, `maxAttempts`, `maxAgeMinutes`, `notify.dropped` + `ctx.activity.log`), job `delivery-drain` (`*/1 * * * *`), `onShutdown` grava filas, `observability.ts` (logs e métricas da decisão 13), `onHealth` degradado. Cada módulo com relógio falso e harness `runJob("delivery-drain")`.
+Silêncio, limite, resumo agrupado (digest), retry, job `delivery-drain`, observabilidade e desligamento (decisões 6 e 13). Também resolve dois pontos adiados das revisões: o handler de evento passa a devolver na hora, sem esperar a entrega (evita estourar o timeout de RPC do host); e o plugin implementa `onConfigChanged`, para o host não reiniciar o worker a cada vez que a configuração é salva.
+
+#### Configuração nova (em `BaseConfig`)
+
+| Campo | Tipo | Padrão | Validação |
+| --- | --- | --- | --- |
+| `quietHours` | `{ enabled, start, end, timezone, allowUrgent }` | `{ enabled: false, start: "22:00", end: "07:00", timezone: "UTC", allowUrgent: true }` | `HH:MM` 00:00–23:59; `timezone` aceito por `Intl.DateTimeFormat`; `start === end` com `enabled` é erro |
+| `rateLimit` | `{ perMinute, digestWindowMinutes }` | `10`, `5` | inteiros, `perMinute` 1–600, janela 1–1440 |
+| `retry` | `{ maxAttempts, maxAgeMinutes }` | `5`, `60` | inteiros, 1–20 e 1–1440 |
+
+#### Estrutura (`packages/notify-core/src/`)
+
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `quiet-hours.ts` | `isQuiet(now: Date, qh): boolean`, `localTime(now, timezone): string` (`HH:MM`), `isValidTimezone` |
+| `rate-limit.ts` | `TokenBucket` por empresa, em memória, com relógio injetado: `take(companyId, perMinute, now): boolean` |
+| `queues.ts` | Estado persistido por empresa (`notify/retry`, `notify/digest`) e índice de empresas com pendências (`instance`, `notify/pending`): `RetryItem`, `DigestState`, leitura tolerante a estado corrompido, limites (`RETRY_CAP = 500`, `DIGEST_CAP = 200`) |
+| `delivery.ts` | `createDelivery(deps)`: `deliver(n, config)` (silêncio → digest; sem ficha → digest; envio; retentável → retry; permanente → falha) e `drain(now)` (retries vencidos, digests prontos); `backoffMs(attempt)` = 30 s × 2ⁿ⁻¹ |
+| `digest.ts` | `buildDigest(items, since, timezone, companyId): Notification` — título "N notifications since HH:MM", até 10 linhas, severidade e tom do item mais grave, link para a caixa de entrada |
+| `notifier.ts` | handler não bloqueante com `idle()`; job `delivery-drain`; `health()`; `onConfigChanged` |
+
+`LinkTarget` ganha `{ kind: "inbox" }` → `/{prefixo}/inbox`.
+
+#### Regras
+
+- `deliver`: se `quietHours.enabled` e agora está no silêncio e não (`urgent` e `allowUrgent`) → digest (`notify.queued`, motivo `quiet`). Senão, sem ficha no token bucket → digest (motivo `rate_limit`). Senão envia: ok → status e `notify.sent`; retentável → retry com `nextAt = now + max(backoff(1), retryAfterMs)` (`notify.retry`); permanente → status, log e `notify.failed`.
+- `drain(now)`, para cada empresa do índice, com a configuração atual (sem config ou desligada → descarta as filas):
+  - retries com `nextAt ≤ now`: envia; ok → remove; retentável e `attempts < maxAttempts` e idade < `maxAgeMinutes` → reagenda; senão → descarta com `ctx.activity.log` e `notify.dropped`.
+  - digest: envia quando há itens, não está no silêncio e `now − since ≥ digestWindowMinutes` (ou o silêncio acabou); falha retentável mantém os itens para o próximo drain; permanente descarta com `notify.dropped`.
+  - empresa sem pendências sai do índice.
+- Filas cheias descartam o item mais antigo com `notify.dropped`.
+- `health()`: `degraded` se a última entrega falhou há menos de 5 min ou se alguma fila de retry passa de 100 itens; senão `ok`.
+- `onShutdown`: espera `idle()` (as filas já estão em `ctx.state`).
+
+#### Tarefas
+
+- [ ] **4.1 Configuração** — campos, defaults, validação e schema; testes de cada limite e do fuso inválido (Pontos de atenção 5).
+- [ ] **4.2 Silêncio** — `isQuiet` com relógio falso: janela no mesmo dia, cruzando a meia-noite (antes, dentro, depois), fuso com horário de verão, `enabled: false`.
+- [ ] **4.3 Token bucket** — consome até `perMinute`, repõe proporcionalmente ao tempo, empresas independentes.
+- [ ] **4.4 Filas** — leitura de estado corrompido, limites com descarte do mais antigo, índice de pendências.
+- [ ] **4.5 Digest** — título, 10 linhas + "and N more", severidade/tom máximos, link da caixa de entrada.
+- [ ] **4.6 Entrega** — `deliver` e `drain` com portas falsas: cada ramo das regras acima, `Retry-After`, `maxAttempts`, `maxAgeMinutes`, activity log no descarte.
+- [ ] **4.7 Orquestrador** — handler não bloqueante + `idle()`; job registrado; `health()`; harness `runJob("delivery-drain")` com relógio falso: servidor fora do ar → retry → volta → entrega (critério 7); silêncio → digest ao fim (critério 6).
+- [ ] **4.8 Plugin ntfy** — manifest com `jobs` (`delivery-drain`, `*/1 * * * *`) e capabilities `jobs.schedule`, `activity.log.write`; worker com `onHealth`, `onShutdown`, `onConfigChanged`; validação do host continua passando.
+
+Cobertura do core ≥ 90%. Verificação: `pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build`.
 
 ### Fase 5 — Plugin Apprise (com e sem estado)
 
