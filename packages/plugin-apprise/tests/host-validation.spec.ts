@@ -46,3 +46,20 @@ describe("host config validation", () => {
     expect(hostValidator()({})).toBe(false);
   });
 });
+
+describe("host schema compilation", () => {
+  it("compiles in the host's Ajv with only the known secret-ref warning", () => {
+    const warnings: unknown[] = [];
+    const logger = { log() {}, warn: (...args: unknown[]) => warnings.push(args), error() {} };
+    const ajv = new Ajv({ allErrors: true, logger });
+    addFormats(ajv);
+    ajv.addFormat("secret-ref", { validate: () => true });
+    ajv.compile(appriseConfigSchema);
+    // Host limitation: one "missing type" warning per secret-ref field (configKey, destinations.*.url, auth.password, extraHeaders.*.value),
+    // because saved secrets are objects. See notify-core fields.ts.
+    const formatWarning = (w: unknown) =>
+      String(w).includes('missing type "number,string" for keyword "format"');
+    expect(warnings.every(formatWarning)).toBe(true);
+    expect(warnings).toHaveLength(4);
+  });
+});

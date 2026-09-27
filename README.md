@@ -36,6 +36,7 @@ Every user-facing change needs a changeset (`pnpm changeset`).
 
 - [Notification plugins (ntfy and Apprise)](docs/specs/2026-09-27-notify-plugins-design.md) — in Portuguese.
 - [Implementation plan](docs/superpowers/plans/2026-09-27-notify-plugins.md) — in Portuguese.
+- [End-to-end checklist](docs/e2e-checklist.md) — what CI covers and what to check by hand.
 
 ## License
 

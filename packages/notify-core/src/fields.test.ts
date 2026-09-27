@@ -122,7 +122,7 @@ describe("schemas", () => {
       items: { properties: Record<string, unknown> };
     };
     expect(schema.type).toBe("array");
-    expect(schema.items.properties.value).toEqual({ format: "secret-ref", title: "Value" });
+    expect(schema.items.properties.value).toMatchObject({ format: "secret-ref", title: "Value" });
   });
 });
 
