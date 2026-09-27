@@ -220,7 +220,7 @@ describe("responses", () => {
     [400, false, "apprise-api rejected the request (HTTP 400)"],
     [401, false, "apprise-api: authentication failed (HTTP 401)"],
     [403, false, "apprise-api: access denied (HTTP 403)"],
-    [404, false, "apprise-api: configuration key not found (HTTP 404)"],
+    [404, false, "apprise-api: not found, check apiUrl (HTTP 404)"],
     [424, false, "apprise-api: a destination failed or no tag matched (HTTP 424)"],
     [500, true, "apprise-api unavailable (HTTP 500)"],
     [503, true, "apprise-api unavailable (HTTP 503)"],
@@ -341,6 +341,34 @@ describe("stateless 204", () => {
       ok: false,
       retryable: false,
       error: "apprise-api: no valid destinations (HTTP 204)",
+    });
+  });
+});
+
+describe("backlog fixes (apprise sender)", () => {
+  it("inserts ntfy parameters before a fragment", async () => {
+    const d = deps();
+    SECRETS.ntfyf = "ntfys://ntfy.example.com/alerts#note";
+    const { url: _url, ...rest } = notification;
+    await appriseSender.send(rest, stateless([{ url: secret("ntfyf") }]), d);
+    expect((call(d).body.urls as string[])[0]).toBe(
+      "ntfys://ntfy.example.com/alerts?priority=high&tags=rotating_light%2Crun#note",
+    );
+  });
+
+  it("keeps one ntfy tag per notification tag even when a tag has a comma", async () => {
+    const d = deps();
+    const { url: _url, ...rest } = notification;
+    await appriseSender.send({ ...rest, tags: ["a,b"] }, stateless([{ url: secret("ntfy") }]), d);
+    expect((call(d).body.urls as string[])[0]).toContain("tags=rotating_light%2Ca_b");
+  });
+
+  it("explains a 404 as a wrong apiUrl", async () => {
+    const d = deps([new Response("", { status: 404 })]);
+    expect(await appriseSender.send(notification, stateful(), d)).toEqual({
+      ok: false,
+      retryable: false,
+      error: "apprise-api: not found, check apiUrl (HTTP 404)",
     });
   });
 });

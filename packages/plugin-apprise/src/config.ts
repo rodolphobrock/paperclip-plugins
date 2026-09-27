@@ -193,7 +193,8 @@ export const appriseConfigSchema: JsonSchema & {
           s,
           {
             type: "string",
-            pattern: `^(${TAGS_PATTERN.source.slice(1, -1)})?$`,
+            // Surrounding spaces allowed, as the parser trims them.
+            pattern: `^\\s*(${TAGS_PATTERN.source.slice(1, -1)})?\\s*$`,
             default: DEFAULT_TAGS[s],
           },
         ]),

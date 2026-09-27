@@ -34,7 +34,7 @@ describe("host config validation", () => {
         apiUrl: "http://apprise:8000",
         configKey: ref,
         paperclipBaseUrl: "",
-        tagsBySeverity: { low: "" },
+        tagsBySeverity: { low: "", high: " ops " },
       },
     ],
   ])("accepts a saved %s config", (_label, config) => {

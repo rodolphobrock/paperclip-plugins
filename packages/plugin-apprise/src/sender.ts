@@ -52,7 +52,7 @@ const STATUS_ERRORS: Readonly<Record<number, string>> = {
   400: "apprise-api rejected the request",
   401: "apprise-api: authentication failed",
   403: "apprise-api: access denied",
-  404: "apprise-api: configuration key not found",
+  404: "apprise-api: not found, check apiUrl",
   // A destination failed or no tag matched; resending would duplicate on the others.
   424: "apprise-api: a destination failed or no tag matched",
   429: "apprise-api rate limited the request",
@@ -87,7 +87,8 @@ function isNtfyUrl(url: string): boolean {
 function withNtfyParams(url: string, n: Notification): string {
   const params: [string, string][] = [
     ["priority", NTFY_PRIORITY[n.severity]],
-    ["tags", [NTFY_TAG_BY_TONE[n.tone], ...n.tags].join(",")],
+    // ntfy splits tags on commas, so a comma inside one tag would make two.
+    ["tags", [NTFY_TAG_BY_TONE[n.tone], ...n.tags.map((t) => t.replaceAll(",", "_"))].join(",")],
   ];
   if (n.url !== undefined) params.push(["click", n.url]);
   // `xtags` is Apprise's current name for `tags`; either one set by the operator wins.
@@ -97,7 +98,11 @@ function withNtfyParams(url: string, n: Notification): string {
     .filter(([name]) => !present(name))
     .map(([name, value]) => `${name}=${encodeURIComponent(value)}`);
   if (added.length === 0) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}${added.join("&")}`;
+  // Parameters go before any #fragment, which would otherwise swallow them.
+  const hashAt = url.indexOf("#");
+  const base = hashAt === -1 ? url : url.slice(0, hashAt);
+  const fragment = hashAt === -1 ? "" : url.slice(hashAt);
+  return `${base}${base.includes("?") ? "&" : "?"}${added.join("&")}${fragment}`;
 }
 
 async function buildHeaders(
