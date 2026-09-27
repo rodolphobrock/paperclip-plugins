@@ -30,6 +30,17 @@ Fecha a #26 e cobre boa parte da #2897 e da #3257 sem tocar no core.
 - Web Push no navegador (#597, #755).
 - Garantia de entrega: o barramento de eventos do host não persiste eventos (ver "Fatos").
 
+## Alternativas consideradas
+
+| Alternativa | Decisão | Motivo |
+| --- | --- | --- |
+| PR no core ou em `packages/plugins/` do Paperclip | descartada | Política do repositório (plugins de terceiros vão para o npm), nenhum notifier da comunidade mergeado até hoje, CI trava pacote novo (lockfile proibido em PR, Dockerfile, manifest de release). |
+| Só ntfy nativo | parcial | Recursos completos do ntfy (prioridade, tags, clique por evento), mas público estreito. |
+| Só Apprise | parcial | Mais de 100 destinos com um plugin, mas perde prioridade e link de clique por evento no modo com estado e exige o container do apprise-api. |
+| Um plugin híbrido (ntfy + Apprise como backends) | descartada | Configuração condicionada ao backend, permissões somadas, nome genérico ruim para descoberta. |
+| **Dois plugins + biblioteca comum** | **escolhida** | Responsabilidade única, configuração enxuta, nomes fáceis de achar, mesmo padrão dos notifiers da comunidade; a parte cara fica na biblioteca. Custo: cerca de 1 dia a mais e três pacotes para publicar. |
+| Um repositório por plugin | descartada | CI, lint e release repetidos; atualização do SDK em vários lugares. Monorepo `paperclip-plugins` com regra para separar um plugin quando fizer sentido (decisão 1). |
+
 ## Fatos do fornecedor que moldam o desenho
 
 Verificados no Paperclip `0f14d26` (master de 2026-09-27); SDK publicado no npm como `@paperclipai/plugin-sdk@2026.916.1` (`latest` na data).
