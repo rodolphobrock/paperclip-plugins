@@ -70,7 +70,7 @@ async function buildHeaders(config: NtfyConfig, deps: SenderDeps): Promise<Recor
   const headers: Record<string, string> = { "Content-Type": "application/json" };
 
   for (const [index, header] of config.extraHeaders.entries()) {
-    headers[header.name] = await deps.resolveSecret(header.value, `extraHeaders[${index}].value`);
+    headers[header.name] = await deps.resolveSecret(header.value, `extraHeaders.${index}.value`);
   }
 
   const { auth } = config;

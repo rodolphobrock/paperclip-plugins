@@ -60,7 +60,7 @@ export function parseNtfyConfig(raw: unknown): NtfyConfig {
         issues.push(`topicsBySeverity.${severity} is not a severity (${SEVERITIES.join(", ")})`);
         continue;
       }
-      const parsed = parseTopic(value, `topicsBySeverity.${severity}`, issues, true);
+      const parsed = parseTopic(value, `topicsBySeverity.${severity}`, issues, false);
       if (parsed !== undefined) topicsBySeverity[severity] = parsed;
     }
   }
@@ -174,10 +174,14 @@ function parseExtraHeaders(value: unknown, issues: string[]): NtfyConfig["extraH
  * Ajv check would reject them under `type: "string"`. The form picks the widget from `format`.
  */
 const secretRefSchema = (title: string): JsonSchema => ({ format: "secret-ref", title });
-const topicSchema = (title: string): JsonSchema => ({
+// Patterns instead of format "uri", and optional fields accept "": the host form saves ""
+// when a user clears a field, and the host validates the saved config with Ajv.
+const URL_PATTERN = "^(https?://\\S+)?$";
+const OPTIONAL_TOPIC_PATTERN = "^([A-Za-z0-9_-]{1,64})?$";
+const topicSchema = (title: string, optional = false): JsonSchema => ({
   type: "string",
   title,
-  pattern: TOPIC_PATTERN.source,
+  pattern: optional ? OPTIONAL_TOPIC_PATTERN : TOPIC_PATTERN.source,
 });
 
 /** `instanceConfigSchema` for the manifest: shared fields plus ntfy fields. */
@@ -190,7 +194,7 @@ export const ntfyConfigSchema: JsonSchema & {
   properties: {
     serverUrl: {
       type: "string",
-      format: "uri",
+      pattern: URL_PATTERN,
       title: "ntfy server URL",
       default: DEFAULT_SERVER,
     },
@@ -202,7 +206,7 @@ export const ntfyConfigSchema: JsonSchema & {
       type: "object",
       title: "Topic per severity",
       description: "Optional overrides, e.g. urgent alerts on a separate topic.",
-      properties: Object.fromEntries(SEVERITIES.map((s) => [s, topicSchema(s)])),
+      properties: Object.fromEntries(SEVERITIES.map((s) => [s, topicSchema(s, true)])),
     },
     auth: {
       type: "object",
@@ -230,7 +234,7 @@ export const ntfyConfigSchema: JsonSchema & {
       default: [],
     },
     markdown: { type: "boolean", title: "Markdown", default: false },
-    iconUrl: { type: "string", format: "uri", title: "Icon URL" },
+    iconUrl: { type: "string", pattern: URL_PATTERN, title: "Icon URL" },
     ...baseConfigSchema.properties,
   },
 };

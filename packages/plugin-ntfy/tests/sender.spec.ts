@@ -150,7 +150,7 @@ describe("ntfySender.send", () => {
       "CF-Access-Client-Id": "value-of-id",
       "CF-Access-Client-Secret": "value-of-sec",
     });
-    expect(d.resolveSecret).toHaveBeenCalledWith(secret("sec"), "extraHeaders[1].value");
+    expect(d.resolveSecret).toHaveBeenCalledWith(secret("sec"), "extraHeaders.1.value");
   });
 
   it("classifies HTTP failures", async () => {
@@ -190,7 +190,7 @@ describe("ntfySender.send", () => {
     expect(result).toEqual({
       ok: false,
       retryable: false,
-      error: "secret resolution failed (auth.token)",
+      error: "secret resolution failed (auth.token): unavailable",
     });
     expect(d.fetch).not.toHaveBeenCalled();
   });
