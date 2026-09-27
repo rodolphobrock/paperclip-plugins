@@ -169,11 +169,11 @@ function parseExtraHeaders(value: unknown, issues: string[]): NtfyConfig["extraH
   return headers;
 }
 
-const secretRefSchema = (title: string): JsonSchema => ({
-  type: "string",
-  format: "secret-ref",
-  title,
-});
+/**
+ * No `type`: the host UI saves `{ type: "secret_ref", secretId }` objects, and its server-side
+ * Ajv check would reject them under `type: "string"`. The form picks the widget from `format`.
+ */
+const secretRefSchema = (title: string): JsonSchema => ({ format: "secret-ref", title });
 const topicSchema = (title: string): JsonSchema => ({
   type: "string",
   title,
