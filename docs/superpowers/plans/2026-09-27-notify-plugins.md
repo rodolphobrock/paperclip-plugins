@@ -133,22 +133,185 @@ Resultado: `pnpm install && pnpm lint && pnpm typecheck && pnpm test && pnpm bui
 
 ## Fases seguintes
 
-As fases 2 a 7 têm arquivos, interfaces e casos de teste definidos aqui. O código detalhado de cada passo é escrito numa revisão deste plano no começo de cada fase, porque dois pontos em aberto da spec (campo que distingue limite suave e rígido de orçamento; autor em `issue.comment.created`) mudam o código dos mapeadores e só se resolvem lendo os payloads reais em `D:\tmp\pc\server`.
+As fases 3 a 7 têm arquivos, interfaces e casos de teste definidos aqui; o detalhamento de cada uma é escrito no começo da fase. A fase 2 foi detalhada a partir dos payloads reais do servidor (`D:\tmp\pc`, commit `0f14d26`).
 
 ### Fase 2 — Core: contratos, mapeadores, política, dedupe, deep links
 
-| Tarefa | Arquivos (`packages/notify-core/src/`) | Interface produzida | Testes |
-| --- | --- | --- | --- |
-| 2.1 Contratos | `types.ts` | `Notification`, `SendResult`, `NotificationSender<C>`, `SenderDeps`, `BaseConfig`, `SecretRef` (decisão 3) | tipos compilam; `isSecretRef` |
-| 2.2 Classificação HTTP | `http-result.ts` | `classifyResponse(res: Response): Promise<SendResult>`, `classifyError(err: unknown): SendResult`, `parseRetryAfter(header, now): number \| undefined` | 2xx, 400, 401, 404, 429 com e sem `Retry-After` (segundos e data), 500, 503, `AbortError`, `TypeError` de rede |
-| 2.3 Configuração comum | `config.ts`, `config-schema.ts` | `baseConfigSchema` (fragmento JSON Schema), `parseBaseConfig(raw: unknown): BaseConfig` com defaults da decisão 7 | defaults, valores inválidos, `events` parcial mesclado com a tabela da decisão 4 |
-| 2.4 Mapeadores | `events/catalog.ts`, `events/<tipo>.ts`, `events/guards.ts` | `EVENT_CATALOG`, `mapEvent(event: PluginEvent, enrich: Enrichment): Notification \| null` | cada linha da tabela da decisão 4; payload `null`/`{}`/tipo errado → genérico; título ≤ 120 |
-| 2.5 Política | `policy.ts` | `applyPolicy(n, config, meta): { pass: true } \| { pass: false; reason: "disabled" \| "severity" \| "filter" }` | `minSeverity`, override por evento, filtros de projeto e agente |
-| 2.6 Dedupe | `dedupe.ts` | `semanticKey(event, n): string`, `DedupeStore` (anel de 500, TTL 10 min, `ctx.state` escopo `company`, namespace `notify`, chave `dedupe`) | mesma chave duas vezes; TTL expirado; anel cheio descarta a mais antiga |
-| 2.7 Deep links | `links.ts` | `buildDeepLink(base, prefix, target): string \| undefined`, cache de `issuePrefix` 10 min | barra final, caminho na base, sem base → `undefined` e aviso único por empresa |
-| 2.8 Orquestração | `notifier.ts` | `createNotifier({ sender, parseConfig })` com um `events.on` por tipo; enriquecimento com degradação | harness: registra o handler duas vezes (simula #13732) e sai uma notificação; empresa sem config não envia |
+#### Fatos levantados no código do Paperclip (`0f14d26`) que mudam a spec
 
-Cobertura do core ≥ 90% ao fim da fase (`vitest.config.ts` com `thresholds`).
+| Ponto | O que o servidor faz | Consequência |
+| --- | --- | --- |
+| Limite suave × rígido | Os dois viram `budget.incident.opened` sem campo de tipo; só o rígido tem a chave `approvalId` no payload (`server/src/services/budgets.ts:673-713`) | `"approvalId" in payload` → rígido (urgent); senão → suave (high) |
+| `approval.decided` | Sem status no payload (`routes/approvals.ts:305-458`) | Status só via `ctx.approvals.get`; sem ele, título "Aprovação decidida", tom `info` |
+| `agent.status_changed` | Declarado, nunca emitido | Fora do catálogo |
+| `agent.run.failed` | Envelope `entityType: "heartbeat_run"`; payload `{ runId, agentId, status: "failed" \| "timed_out", error, errorCode, issueId, … }` (`heartbeat.ts:12991`) | Título diferencia falha e timeout; nome do agente via `ctx.agents.get` |
+| `issue.updated` | Status em formatos diferentes: `status` + `_previous.status` (rota principal), `status` + `previousStatus` (wake-queue), `patch.status` + `_previous.status` (rota de plugin), às vezes só `status` | Status novo = `status ?? patch.status`; anterior = `_previous.status ?? previousStatus`; notifica quando há status novo e ele difere do anterior (anterior ausente conta como mudança) |
+| `issue.comment.created` | Autor só no envelope (`actorType`/`actorId`); responsável não vem no payload; `identifier`/`issueTitle` nem sempre presentes | Ignora quando `actorType === "agent"` e `actorId` é o `assigneeAgentId` da issue (`ctx.issues.get`) |
+| `issue.created` | Payload com `title`, `identifier`, `status`; sem `projectId` | Filtro por projeto usa `ctx.issues.get` quando há filtro |
+| Envelope | `eventId` novo a cada escrita no log de atividade; payload sempre com `agentId` (agente que agiu), `runId` | Chave semântica por fato; `agentId` do payload alimenta o filtro de agentes |
+| Secrets | Valor salvo `{ type: "secret_ref", secretId, version? }`; tipo `EnvSecretRefBinding` exportado pelo SDK | `SecretRef = EnvSecretRefBinding` |
+| Harness | `secrets.resolve` devolve `"resolved:…"`; `config.get` ignora empresa; `seed({ companies, approvals, agents, issues })` alimenta os `get` | Testes do orquestrador usam `seed` e um sender falso |
+
+#### Estrutura (`packages/notify-core/src/`)
+
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `types.ts` | `Notification`, `SendResult`, `NotificationSender<C>`, `SenderDeps`, `SecretRef`, `LinkTarget` |
+| `guards.ts` | `isRecord`, `readString`, `readNumber`, `isSecretRef` |
+| `http-result.ts` | `classifyResponse`, `classifyError`, `parseRetryAfter` |
+| `catalog.ts` | `SUBSCRIBED_EVENT_TYPES`, `RuleKey`, `DEFAULT_RULES` |
+| `config.ts` | `BaseConfig`, `baseConfigSchema`, `parseBaseConfig`, `ConfigError` |
+| `mappers.ts` | `mapEvent(event, facts): NotificationDraft \| null` (puro) |
+| `enrich.ts` | `collectFacts(event, ports, logger, needsIssue): Promise<EventFacts>` (bordas, com degradação) |
+| `policy.ts` | `applyPolicy(draft, config)` |
+| `dedupe.ts` | `semanticKey`, `DedupeStore` sobre uma porta de estado |
+| `links.ts` | `buildDeepLink`, `PrefixCache` |
+| `notifier.ts` | `createNotifier` |
+
+#### Interfaces
+
+```ts
+// types.ts
+import type { EnvSecretRefBinding, PluginEventType, PluginLogger } from "@paperclipai/plugin-sdk";
+export type SecretRef = EnvSecretRefBinding;
+export type LinkTarget =
+  | { kind: "issue"; identifier: string }
+  | { kind: "approval"; approvalId: string }
+  | { kind: "run"; agentId: string; runId: string };
+export interface Notification {
+  key: string; companyId: string; eventType: PluginEventType; severity: Severity; tone: Tone;
+  title: string; body: string; url?: string; tags: string[]; occurredAt: string;
+}
+export type SendResult = { ok: true } | { ok: false; retryable: boolean; error: string; retryAfterMs?: number };
+export interface SenderDeps {
+  fetch: typeof fetch;
+  resolveSecret(ref: SecretRef, configPath: string): Promise<string>;
+  logger: PluginLogger;
+}
+export interface NotificationSender<C> {
+  readonly name: string;
+  send(n: Notification, config: C, deps: SenderDeps): Promise<SendResult>;
+  sendTest(config: C, deps: SenderDeps): Promise<SendResult>;
+}
+
+// catalog.ts — chave de regra = tipo de evento, ou tipo.variante quando a condição muda a severidade
+export type RuleKey =
+  | "approval.created" | "approval.decided" | "agent.run.failed" | "agent.run.finished"
+  | "budget.incident.opened.hard" | "budget.incident.opened.soft" | "budget.incident.resolved"
+  | "issue.updated.blocked" | "issue.updated.done" | "issue.created" | "issue.comment.created";
+export const SUBSCRIBED_EVENT_TYPES: readonly PluginEventType[]; // 9 tipos, um events.on cada
+export const DEFAULT_RULES: Readonly<Record<RuleKey, { enabled: boolean; severity: Severity }>>;
+
+// config.ts
+export interface BaseConfig {
+  enabled: boolean;
+  paperclipBaseUrl?: string;
+  events: Record<RuleKey, { enabled: boolean; severity: Severity }>;
+  minSeverity: Severity;
+  filters: { projectIds: string[]; agentIds: string[] };
+  network: { allowPrivateNetwork: boolean };
+}
+export class ConfigError extends Error { readonly issues: string[] }
+export function parseBaseConfig(raw: unknown): BaseConfig;   // lança ConfigError com todos os problemas
+export const baseConfigSchema: { properties: Record<string, JsonSchema> };
+
+// mappers.ts
+export interface EventFacts {
+  approval?: { status: string; type: string };
+  agentName?: string;
+  issue?: { assigneeAgentId: string | null; projectId: string | null; identifier: string | null; title: string };
+}
+export interface NotificationDraft {
+  rule: RuleKey; eventType: PluginEventType; severity: Severity; tone: Tone;
+  title: string; body: string; tags: string[]; link?: LinkTarget;
+  factKey: string;          // estado relevante do fato para a chave semântica
+  scope: { projectId?: string; agentId?: string };
+}
+export function mapEvent(event: PluginEvent, facts: EventFacts): NotificationDraft | null;
+
+// enrich.ts
+export interface HostPorts {
+  getApproval(id: string, companyId: string): Promise<{ status: string; type: string } | null>;
+  getAgentName(id: string, companyId: string): Promise<string | null>;
+  getIssue(id: string, companyId: string): Promise<EventFacts["issue"] | null>;
+}
+export function collectFacts(event: PluginEvent, ports: HostPorts, logger: PluginLogger, needsIssue: boolean): Promise<EventFacts>;
+
+// policy.ts
+export type PolicyResult = { pass: true; severity: Severity } | { pass: false; reason: "disabled" | "severity" | "filter" };
+export function applyPolicy(draft: NotificationDraft, config: BaseConfig): PolicyResult;
+
+// dedupe.ts
+export interface StatePort { get(): Promise<unknown>; set(value: unknown): Promise<void> }
+export function semanticKey(eventType: string, entityId: string | undefined, factKey: string): string;
+export class DedupeStore {
+  constructor(state: StatePort, opts?: { capacity?: number; ttlMs?: number });  // 500, 600_000
+  seen(keys: string[], now: number): Promise<boolean>;   // true se alguma chave está no anel e não expirou
+  remember(keys: string[], now: number): Promise<void>;
+}
+
+// links.ts
+export function buildDeepLink(baseUrl: string | undefined, issuePrefix: string, target: LinkTarget): string | undefined;
+export class PrefixCache {
+  constructor(load: (companyId: string) => Promise<string | null>, clock: () => number, ttlMs?: number); // 600_000
+  get(companyId: string): Promise<string | null>;
+}
+
+// notifier.ts
+export interface NotifierOptions<C extends BaseConfig> {
+  sender: NotificationSender<C>;
+  parseConfig(raw: unknown): C;
+  clock?: () => number;
+}
+export function createNotifier<C extends BaseConfig>(opts: NotifierOptions<C>): { setup(ctx: PluginContext): Promise<void> };
+```
+
+#### Regras de mapeamento (`mapEvent`)
+
+| Evento | Condição | Regra | Tom | Título | Link | `factKey` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `approval.created` | sempre | `approval.created` | warning | "Aprovação pendente: {tipo legível}" | approval | `created` |
+| `approval.decided` | `facts.approval.status` | `approval.decided` | approved → success; rejected → failure; revision_requested → warning; outro/ausente → info | "Aprovação {aprovada\|rejeitada\|com revisão pedida\|decidida}: {tipo}" | approval | status ou `unknown` |
+| `agent.run.failed` | sempre | `agent.run.failed` | failure | "{agente} falhou" ou "{agente} excedeu o tempo" (`status: "timed_out"`); agente = `facts.agentName ?? "Agente"` | run | `failed` |
+| `agent.run.finished` | sempre | `agent.run.finished` | success | "{agente} concluiu uma execução" | run | `finished` |
+| `budget.incident.opened` | `"approvalId" in payload` | `.hard` | failure | "Limite de orçamento atingido" | — | `hard` |
+| `budget.incident.opened` | senão | `.soft` | warning | "Orçamento perto do limite" | — | `soft` |
+| `budget.incident.resolved` | sempre | `budget.incident.resolved` | success | "Incidente de orçamento resolvido" | — | `resolved` |
+| `issue.updated` | status novo `blocked`, diferente do anterior | `.blocked` | warning | "{identifier} bloqueada" | issue | `blocked` |
+| `issue.updated` | status novo `done`, diferente do anterior | `.done` | success | "{identifier} concluída" | issue | `done` |
+| `issue.created` | sempre | `issue.created` | info | "Nova issue {identifier}: {title}" | issue | `created` |
+| `issue.comment.created` | ator não é o agente responsável | `issue.comment.created` | info | "Comentário em {identifier}" | issue | `commentId` ou `eventId` |
+
+- Qualquer outro caso → `null` (ignorado). Payload que não é objeto ou sem os campos esperados → o mapeador usa o que houver; faltando identificador, o título usa "Issue" e a notificação sai sem link.
+- Títulos são truncados em 120 caracteres (reticências `…`). Corpo: 1–3 linhas com os dados disponíveis (valores e limite do orçamento, erro da execução, trecho do comentário).
+- Severidade do rascunho = `DEFAULT_RULES[rule].severity`; a política troca pela da configuração.
+- `tags`: tipo curto (`approval`, `run`, `budget`, `issue`, `comment`) e `agent:{nome}` quando conhecido.
+
+#### Orquestração (`createNotifier().setup(ctx)`)
+
+1. Registra exatamente um `ctx.events.on` por tipo de `SUBSCRIBED_EVENT_TYPES`.
+2. Para cada evento, serializa por empresa (fila de promessas em memória, evita corrida no anel de dedupe).
+3. `ctx.config.get(companyId)`; objeto vazio ou `enabled: false` → para, sem gravar estado. `ConfigError` → `logger.warn` uma vez por empresa e para.
+4. `collectFacts` só com as consultas que o evento pede (`approval.*` → approval; `agent.run.*` → nome do agente; `issue.comment.created`, ou filtro de projeto ligado para eventos de issue → issue). Consulta que falha: `logger.warn("notify.enrich_failed")`, segue sem o dado.
+5. `mapEvent` → `null` para. `applyPolicy` reprovado → `logger.debug("notify.suppressed", { reason })` e métrica `notify.suppressed`.
+6. Chaves `eventId:{id}` e `semanticKey(...)`; `DedupeStore` em `ctx.state` (`scopeKind: "company"`, `scopeId: companyId`, `namespace: "notify"`, `stateKey: "dedupe"`). Vista → métrica `notify.deduped` e para. A chave é gravada antes do envio (no máximo uma tentativa por fato).
+7. Link: `buildDeepLink(config.paperclipBaseUrl, prefixo, alvo)`; sem `paperclipBaseUrl` → `logger.warn` uma vez por empresa.
+8. `SenderDeps`: `fetch` = `ctx.http.fetch` ou, com `network.allowPrivateNetwork`, o `fetch` global com timeout de 10 s (`AbortSignal.timeout`); `resolveSecret` com cache em memória de 5 min por empresa + `secretId` + `version`.
+9. `sender.send`: ok → `logger.info("notify.sent")` + métrica `notify.sent`; falha → `logger.error("notify.failed", { error, retryable })` + métrica `notify.failed` (retry chega na fase 4). Exceção do sender é tratada como falha retentável.
+
+#### Tarefas
+
+- [ ] **2.1 Contratos e guardas** — `types.ts`, `guards.ts` + `guards.test.ts` (`isRecord` com objeto/array/null; `readString`/`readNumber` com tipo certo, errado e ausente; `isSecretRef` com `{ type: "secret_ref", secretId }`, sem `secretId`, tipo errado, string). Commit `feat(notify-core): contratos e guardas`.
+- [ ] **2.2 Classificação HTTP** — `http-result.ts` + teste: 200/204 ok; 400/401/404 não retentável com status no erro; 429 com `Retry-After: 30` → 30 000 ms, com data HTTP → diferença até `now`, inválido → sem `retryAfterMs`; 500/503 retentável; `DOMException` `AbortError`/`TimeoutError` e `TypeError` retentáveis; erro desconhecido retentável. A mensagem de erro inclui no máximo 200 caracteres do corpo. Commit `feat(notify-core): classificação de respostas HTTP`.
+- [ ] **2.3 Catálogo e configuração** — `catalog.ts`, `config.ts` + teste: defaults completos a partir de `{}`; `events` parcial mesclado; severidade inválida, `minSeverity` inválido, `paperclipBaseUrl` que não é http(s), filtros que não são lista de strings → `ConfigError` com todos os problemas; `paperclipBaseUrl` com barra final é normalizado; `baseConfigSchema` tem uma propriedade por campo. Commit `feat(notify-core): catálogo de eventos e configuração comum`.
+- [ ] **2.4 Mapeadores** — `mappers.ts` + teste: uma asserção por linha da tabela; `approval.decided` sem fatos → info; `timed_out`; orçamento rígido com `approvalId: null`; `issue.updated` nos quatro formatos de status e sem mudança real → `null`; comentário do responsável → `null`, de usuário → notificação; payload `null`, `{}` e campos com tipo trocado não lançam; título de 300 caracteres truncado em 120. Commit `feat(notify-core): mapeadores de eventos`.
+- [ ] **2.5 Enriquecimento** — `enrich.ts` + teste com portas falsas: só chama a porta que o evento pede; porta que lança → fato ausente e um `warn`. Commit `feat(notify-core): enriquecimento com degradação`.
+- [ ] **2.6 Política** — `policy.ts` + teste: regra desligada; override de severidade; `minSeverity`; filtro de agente (casa, não casa, agente desconhecido com filtro → bloqueia); filtro de projeto idem. Commit `feat(notify-core): política de filtros e severidade`.
+- [ ] **2.7 Dedupe** — `dedupe.ts` + teste: chave repetida dentro do TTL → vista; depois do TTL → nova; anel cheio descarta a mais antiga; estado corrompido (não lista) → começa vazio. Commit `feat(notify-core): deduplicação por chave semântica`.
+- [ ] **2.8 Deep links** — `links.ts` + teste: três alvos; base com barra final e com caminho (`https://h/pc`); base ausente → `undefined`; identificador com caracteres especiais é codificado; `PrefixCache` chama o carregador uma vez dentro do TTL e de novo depois. Commit `feat(notify-core): deep links`.
+- [ ] **2.9 Orquestrador** — `notifier.ts` + `notifier.test.ts` com `createTestHarness`, `seed` e sender falso: evento padrão gera um envio com título, severidade e link certos; `setup` chamado duas vezes (simula #13732) → um envio; mesmo fato com `eventId` diferente → um envio; empresa sem config → nenhum envio e nenhum estado; `enabled: false` → nenhum; config inválida → um `warn` só em dois eventos; falha de enriquecimento → envio sem o dado; falha do sender → `notify.failed`; `allowPrivateNetwork` escolhe o `fetch` global; `resolveSecret` usa cache. Commit `feat(notify-core): orquestrador createNotifier`.
+
+Cobertura do core ≥ 90% ao fim da fase (`vitest.config.ts` com `thresholds`). Verificação da fase: `pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build`.
 
 ### Fase 3 — Plugin ntfy v0.1
 
