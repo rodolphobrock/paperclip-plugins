@@ -1,7 +1,6 @@
 {
   "name": "paperclip-plugin-apprise",
   "version": "0.0.0",
-  "private": true,
   "description": "Notifications for Paperclip events to 100+ services via apprise-api.",
   "license": "MIT",
   "type": "module",
@@ -11,6 +10,10 @@
     "notifications",
     "apprise"
   ],
+  "homepage": "https://github.com/rodolphobrock/paperclip-plugins/tree/main/packages/plugin-apprise#readme",
+  "bugs": {
+    "url": "https://github.com/rodolphobrock/paperclip-plugins/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rodolphobrock/paperclip-plugins.git",
@@ -20,7 +23,9 @@
     "node": ">=24.11.0"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
@@ -42,6 +47,11 @@
     "@paperclipai/plugin-sdk": ">=2026.916.1",
     "react": ">=18"
   },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@paperclip-plugins/notify-core": "workspace:*",
     "@paperclipai/plugin-sdk": "2026.916.1",
@@ -50,10 +60,5 @@
     "ajv-formats": "^3.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
   }
 }

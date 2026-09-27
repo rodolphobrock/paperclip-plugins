@@ -2,15 +2,13 @@
 
 Community plugins for [Paperclip](https://github.com/paperclipai/paperclip).
 
-> Work in progress. Nothing is published to npm yet.
-
 ## Plugins
 
 | Package | Status | Description |
 | --- | --- | --- |
-| `paperclip-plugin-ntfy` | planned | Push notifications for Paperclip events via [ntfy](https://ntfy.sh). |
-| `paperclip-plugin-apprise` | planned | Notifications to 100+ services via [apprise-api](https://github.com/caronc/apprise-api). |
-| `@paperclip-plugins/notify-core` | planned (internal) | Shared notification pipeline bundled into the notifier plugins; not published. |
+| [`paperclip-plugin-ntfy`](packages/plugin-ntfy/README.md) | ready | Push notifications for Paperclip events via [ntfy](https://ntfy.sh). |
+| [`paperclip-plugin-apprise`](packages/plugin-apprise/README.md) | ready | Notifications to 100+ services via [apprise-api](https://github.com/caronc/apprise-api), stateful or stateless. |
+| [`@paperclip-plugins/notify-core`](packages/notify-core/README.md) | internal | Shared notification pipeline bundled into the notifier plugins; not published. |
 
 ## Development
 
@@ -37,6 +35,7 @@ Every user-facing change needs a changeset (`pnpm changeset`).
 - [Notification plugins (ntfy and Apprise)](docs/specs/2026-09-27-notify-plugins-design.md) — in Portuguese.
 - [Implementation plan](docs/superpowers/plans/2026-09-27-notify-plugins.md) — in Portuguese.
 - [End-to-end checklist](docs/e2e-checklist.md) — what CI covers and what to check by hand.
+- [Releasing](RELEASING.md) — versioning, npm publishing and the first-publish token.
 
 ## License
 

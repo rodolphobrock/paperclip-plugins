@@ -55,3 +55,33 @@ jobs:
       - run: pnpm --filter "${{ steps.select.outputs.filter }}" run test:coverage
 
       - run: pnpm --filter "${{ steps.select.outputs.filter }}" run build
+
+  # The SDK follows Paperclip's calendar versions; catch breaking changes before users do.
+  # Beta is advisory: it must not block a PR.
+  sdk-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [latest, beta]
+    continue-on-error: ${{ matrix.sdk == 'beta' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Use @paperclipai/plugin-sdk@${{ matrix.sdk }}
+        run: pnpm -r update "@paperclipai/plugin-sdk@${{ matrix.sdk }}"
+
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

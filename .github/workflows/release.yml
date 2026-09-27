@@ -59,10 +59,15 @@ jobs:
           echo "count=${count}" >> "$GITHUB_OUTPUT"
 
       # After the version PR is merged: publish with npm trusted publishing (OIDC, automatic
-      # provenance, no NPM_TOKEN) and push the release tags. Private packages are skipped, and
+      # provenance, no stored token once set up) and push the release tags. Private packages are skipped, and
       # versions already on npm are not published again.
       - name: Publish
         if: steps.changesets.outputs.hasChangesets == 'false' && steps.publishable.outputs.count != '0'
         run: |
           pnpm exec changeset publish
           git push origin --tags
+        env:
+          # Only for the first publish of a package (npm accepts a trusted publisher only for an
+          # existing package); npm tries OIDC first and falls back to this token. See RELEASING.md.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
