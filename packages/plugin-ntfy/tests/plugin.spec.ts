@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import pkg from "../package.json" with { type: "json" };
 import { ntfyConfigSchema } from "../src/config.js";
 import manifest from "../src/manifest.js";
-import plugin from "../src/worker.js";
+import plugin, { notifier } from "../src/worker.js";
 
 const COMPANY = "test-company";
 
@@ -33,12 +33,23 @@ describe("paperclip-plugin-ntfy manifest", () => {
         "issues.read",
         "metrics.write",
         "instance.settings.register",
+        "jobs.schedule",
+        "activity.log.write",
         "plugin.state.read",
         "plugin.state.write",
         "secrets.read-ref",
       ].sort(),
     );
     expect(manifest.instanceConfigSchema).toBe(ntfyConfigSchema);
+    expect(manifest.jobs).toEqual([
+      {
+        jobKey: "delivery-drain",
+        displayName: "Deliver queued notifications",
+        description:
+          "Retries failed deliveries and sends digests held by quiet hours or the rate limit.",
+        schedule: "*/1 * * * *",
+      },
+    ]);
   });
 });
 
@@ -50,6 +61,11 @@ async function start(config: Record<string, unknown>) {
   });
   const fetch = vi.spyOn(harness.ctx.http, "fetch").mockResolvedValue(new Response("{}"));
   await plugin.definition.setup(harness.ctx);
+  const emit = harness.emit.bind(harness);
+  harness.emit = async (...args: Parameters<typeof harness.emit>) => {
+    await emit(...args);
+    await notifier.idle();
+  };
   return { harness, fetch };
 }
 
@@ -106,7 +122,19 @@ describe("paperclip-plugin-ntfy worker", () => {
     expect(await validate?.({})).toEqual({ ok: false, errors: ["topic is required"] });
   });
 
-  it("reports healthy", async () => {
+  it("reports healthy, drains on shutdown and accepts config changes without restart", async () => {
     expect((await plugin.definition.onHealth?.())?.status).toBe("ok");
+    await expect(plugin.definition.onShutdown?.()).resolves.toBeUndefined();
+    await expect(
+      plugin.definition.onConfigChanged?.({}, { companyId: COMPANY }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("registers the drain job", async () => {
+    const { harness, fetch } = await start(CONFIG);
+    fetch.mockResolvedValueOnce(new Response("", { status: 503 }));
+    await harness.emit(...RUN_FAILED);
+    await harness.runJob("delivery-drain");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

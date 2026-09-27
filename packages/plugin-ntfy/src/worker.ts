@@ -3,7 +3,8 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import { parseNtfyConfig } from "./config.js";
 import { ntfySender } from "./sender.js";
 
-const notifier = createNotifier({ sender: ntfySender, parseConfig: parseNtfyConfig });
+/** Exported for tests, which wait on `notifier.idle()` after emitting events. */
+export const notifier = createNotifier({ sender: ntfySender, parseConfig: parseNtfyConfig });
 
 const plugin = definePlugin({
   async setup(ctx) {
@@ -11,7 +12,17 @@ const plugin = definePlugin({
   },
 
   async onHealth() {
-    return { status: "ok" };
+    return notifier.health();
+  },
+
+  // Queues live in plugin state; only in-flight deliveries need to finish.
+  async onShutdown() {
+    await notifier.idle();
+  },
+
+  // Config is read per event, so a saved change needs no worker restart.
+  async onConfigChanged(_config, context) {
+    notifier.configChanged(context?.companyId ?? null);
   },
 
   // The host's "Test configuration" passes no company, so this only checks structure;
