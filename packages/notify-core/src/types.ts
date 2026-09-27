@@ -31,8 +31,12 @@ export type SendResult =
   | { ok: true }
   | { ok: false; retryable: boolean; error: string; retryAfterMs?: number };
 
+/** The subset of `fetch` both `ctx.http.fetch` and the global fetch provide. */
+export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
+
 export interface SenderDeps {
-  fetch: typeof fetch;
+  /** `ctx.http.fetch` (SSRF-protected), or the global fetch when private networks are allowed. */
+  fetch: FetchLike;
   /** Resolves a secret for the current company; cached by the notifier. */
   resolveSecret(ref: SecretRef, configPath: string): Promise<string>;
   logger: PluginLogger;
