@@ -214,7 +214,7 @@ describe("drain", () => {
     });
     expect(calls).toEqual([
       "digested co-1 2",
-      "sent digest:co-1:" + Date.parse("2026-09-27T12:00:00Z"),
+      `sent digest:co-1:${Date.parse("2026-09-27T12:00:00Z")}`,
     ]);
     expect(digestState.value).toBeNull();
   });
